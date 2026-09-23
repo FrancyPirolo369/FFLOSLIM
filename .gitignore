@@ -1,0 +1,13 @@
+# byte-compiled
+__pycache__/
+*.py[cod]
+
+# output delle run
+out/
+iter[0-9][0-9][0-9]/
+
+# diagnostica rigenerabile
+*.png
+
+# duplicato .txt di PIPELINE_MAP.md
+PIPELINE_MAP.txt
