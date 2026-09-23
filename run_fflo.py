@@ -100,7 +100,9 @@ def build_parser():
     p = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     for name, default, help_ in CONFIG:
-        kw = {"help": f"{help_}  [default: {default}]"}
+        # argparse passa gli help attraverso il %-formatting: un % letterale
+        # ("89% of the pair") diventa una conversione e fa saltare --help.
+        kw = {"help": f"{help_}  [default: {default}]".replace("%", "%%")}
         if isinstance(default, bool):
             kw["action"] = "store_true" if not default else "store_false"
             if default:
