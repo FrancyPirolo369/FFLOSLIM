@@ -1376,7 +1376,12 @@ def main() -> None:
             if "pair_q_selected" in saved_pair.files:
                 pair_q_selected = float(saved_pair["pair_q_selected"])
             else:
-                pair_q_selected = float(q[np.argmax(np.abs(a_pair[:, np.argmin(np.abs(omega_pair))]))])
+                # A retarded bosonic spectral function is exactly zero at
+                # omega=0.  argmax(A_pair[:, 0]) therefore returns q[0], not
+                # the channel used to shift this table.  Legacy shifted files
+                # did not save that metadata; their physically meaningful
+                # fallback is the fixed-mu kF mismatch.
+                pair_q_selected = float(qff)
         pair_kind = "pre_shifted_diagnostic"
         clean_pair_path = args.out_dir / "pre_shifted_pair_used.npz"
     elif args.pair_table is not None:
@@ -1439,6 +1444,7 @@ def main() -> None:
         RePi=re_pi,
         ImPi=im_pi,
         pair_shift=np.array(pair_shift),
+        pair_q_selected=np.array(pair_q_selected),
     )
     pair_delta2, pair_contact = pair_contact_from_shifted_table(q, omega_pair, a_pair)
     print(
