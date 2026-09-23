@@ -335,7 +335,7 @@ def main() -> None:
             "--no-row-normalize-cubes", "--out-dir", str(impi_dir / "residual"),
         ]
         if args.impi_scheme == "matched":
-            command[6:6] = [
+            command += [
                 "--subtract-up-cube-path", str(qp_up),
                 "--subtract-down-cube-path", str(qp_down),
             ]

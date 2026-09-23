@@ -90,6 +90,12 @@ PATCHES = {
          '            "-m", "fflo.impi_table",'),
         ('            str(PIPELINE / "make_pair_gamma_table_proxy_residual.py"),',
          '            "-m", "fflo.pair_gamma",'),
+        # the two replacements above turn ONE list element into TWO, so every
+        # position in `command` shifts by one and the insert at the magic index 6
+        # lands between --down-cube-path and its value (argparse: "expected one
+        # argument").  argparse ignores the order of optionals, so append instead.
+        ('            command[6:6] = [',
+         '            command += ['),
         # ROOT is already the slim root (parents[1] of fflo/pairbuild.py); PIPELINE
         # pointed at a directory that no longer exists
         ('PIPELINE = ROOT / "true_akw_pipeline"\nsys.path.insert(0, str(PIPELINE))',
