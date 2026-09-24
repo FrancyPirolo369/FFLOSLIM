@@ -6,6 +6,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 mkdir -p logs
+SRC12="--up out/D_good_p12/iter012/next_cubes/A_komega_spinup_iter012.npz --down out/D_good_p12/iter012/next_cubes/A_komega_spindown_iter012.npz"
 sub () {  # TAG TARGET ARGS
   sbatch --export=ALL,TAG="$1",TARGET="$2",ARGS="$3" --job-name="slim_$1" run.slurm
 }
@@ -39,6 +40,16 @@ case "${1:-}" in
   # satellite di Tan campionato su 2-3 nodi omega (test/sigma_resolution_probe.py:
   # errore per riga fino a 15% con 41, <=1.8% con 97, 0.3% con 240).
   G) sub G_good_p12_tail 30 "--pintmax 12 --k-update-max 8 --high-k-sigma pair-contact --contact-tail --sigma-nomega 97" ;;
+  # --- un passo solo da D it12 (eccesso gia' uguale nei due spin, +0.014 ciascuno):
+  # quale ingrediente di Gamma lo produce?  Uno per job; si legge la densita' FRESCA
+  # (alpha=1) con test/onestep_report.py.  Richiede out/D_good_p12/iter012/next_cubes.
+  L0) sub L0_base      1 "--pintmax 12 $SRC12" ;;
+  L1) sub L1_eta_exact 1 "--pintmax 12 --eta-floor exact_zero $SRC12" ;;
+  L2) sub L2_noguard   1 "--pintmax 12 --im-sign-guard off $SRC12" ;;
+  L3) sub L3_notaper   1 "--pintmax 12 --taper-mode none $SRC12" ;;
+  L4) sub L4_taper60   1 "--pintmax 12 --taper-stop 60 $SRC12" ;;
+  L5) sub L5_delta1e4  1 "--pintmax 12 --delta 1e-4 $SRC12" ;;
+  L) for j in L0 L1 L2 L3 L4 L5; do "$0" "$j"; done ;;
   all) for j in A B C D F; do "$0" "$j"; done ;;
-  *) echo "uso: ./submit.sh A|B|C|D|E|F|G|all"; exit 1 ;;
+  *) echo "uso: ./submit.sh A|B|C|D|E|F|G|L0..L5|L|all"; exit 1 ;;
 esac

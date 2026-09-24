@@ -94,6 +94,13 @@ CONFIG = [
                                  "(test/fix_truncation.py).  physical = energies "
                                  "k^2/m - (mu + sigma0), what the cube has at large k: "
                                  "the validated choice (2026-09-24 Lambda scan)"),
+    ("taper-mode",   "qkin_cosine", "pair_gamma --residual-omega-taper-mode "
+                                 "(cosine|hard|none|qkin_cosine|qkin_hard).  Any "
+                                 "value other than the pairbuild one runs pair_gamma "
+                                 "separately, like --truncation-fix"),
+    ("taper-stop",   20.0,       "pair_gamma --residual-omega-taper-stop"),
+    ("im-sign-guard", "on",      "pair_gamma --im-inv-sign-guard on|off (clamps "
+                                 "wrong-sign Im Gamma^-1; 7% of the cells at P=0.65)"),
     ("p-nodes",      0,          "pairbuild --p-nodes (0 = profile default, 31 for "
                                  "turbo on [0, Lambda]: scale it with Lambda or a larger "
                                  "Lambda also means a coarser p grid)"),
@@ -370,7 +377,9 @@ def main(argv=None):
         if cfg["coherent_nk"] > 0:
             cmd += ["--coherent-nk", str(cfg["coherent_nk"])]
         fix = cfg["truncation_fix"]
-        if fix != "none":
+        split = (fix != "none" or cfg["taper_mode"] != "qkin_cosine"
+                 or cfg["taper_stop"] != 20.0 or cfg["im_sign_guard"] != "on")
+        if split:
             # pairbuild stops at impi/impi_table.npz; the fix and pair_gamma follow
             cmd.append("--skip-pair")
         with open(os.path.join(itd, "pairbuild.log"), "w") as fh:
@@ -379,26 +388,29 @@ def main(argv=None):
         if rc:
             log(f"=== iter {i}: PAIRBUILD FAILED rc={rc} ===")
             return 1
-        if fix != "none":
+        if split:
             impi = os.path.join(pb, "impi", "impi_table.npz")
-            fixed = os.path.join(pb, "impi", "impi_table_truncfix.npz")
-            steps = [
-                [sys.executable, os.path.join(HERE, "test", "fix_truncation.py"),
-                 "--mu-mode", fix, impi, fixed],
-                # identical to the pair_gamma call inside fflo/pairbuild.py
+            steps = []
+            if fix != "none":
+                fixed = os.path.join(pb, "impi", "impi_table_truncfix.npz")
+                steps.append([sys.executable, os.path.join(HERE, "test", "fix_truncation.py"),
+                              "--mu-mode", fix, impi, fixed])
+            else:
+                fixed = impi
+            steps.append(
+                # the pair_gamma call inside fflo/pairbuild.py, with the test knobs
                 [sys.executable, "-m", "fflo.pair_gamma",
                  "--no-plots", "--impi-table-path", fixed,
                  "--kk-pad", "0", "--kk-oversample", "1", "--kk-tail", "zero",
                  "--kk-tail-alpha", "nan", "--kk-max-n", "0",
-                 "--eta-gamma", "0.002", "--im-inv-sign-guard", "on",
+                 "--eta-gamma", "0.002", "--im-inv-sign-guard", cfg["im_sign_guard"],
                  "--reference-mode", "proxy_residual",
                  "--qp-residual-mode", "cross_inc", "--qpqp-source", "auto",
                  "--qpqp-xi-cutoff", "0.015", "--qpqp-n-p", "5000",
                  "--qpqp-n-phi", "24", "--residual-omega-taper-start", "0",
-                 "--residual-omega-taper-stop", "20",
-                 "--residual-omega-taper-mode", "qkin_cosine",
-                 "--out-dir", os.path.join(pb, "pair")],
-            ]
+                 "--residual-omega-taper-stop", f"{cfg['taper_stop']:g}",
+                 "--residual-omega-taper-mode", cfg["taper_mode"],
+                 "--out-dir", os.path.join(pb, "pair")])
             with open(os.path.join(itd, "truncfix_pair.log"), "w") as fh:
                 for step in steps:
                     rc = subprocess.run(step, env=env, cwd=HERE, stdout=fh,
@@ -406,9 +418,12 @@ def main(argv=None):
                     if rc:
                         log(f"=== iter {i}: TRUNCATION FIX / PAIR_GAMMA FAILED rc={rc} ===")
                         return 1
-            with open(os.path.join(itd, "truncfix_pair.log")) as fh:
-                note = [l.strip() for l in fh if l.startswith("Lambda=")]
-            log(f"=== iter {i} TRUNCFIX: {note[0] if note else '?'} ===")
+            if fix != "none":
+                with open(os.path.join(itd, "truncfix_pair.log")) as fh:
+                    note = [l.strip() for l in fh if l.startswith("Lambda=")]
+                log(f"=== iter {i} TRUNCFIX: {note[0] if note else '?'} ===")
+            log(f"=== iter {i} PAIR_GAMMA: taper {cfg['taper_mode']} stop "
+                f"{cfg['taper_stop']:g}, im-sign-guard {cfg['im_sign_guard']} ===")
 
         pair_table = os.path.join(pb, "pair", "pair_gamma_table.npz")
         t = np.load(pair_table)
