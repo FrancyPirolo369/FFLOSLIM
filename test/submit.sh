@@ -23,7 +23,14 @@ case "${1:-}" in
   D) sub D_good_p12      30 "--pintmax 12" ;;
   # come D ma bolla con Lambda=8: il deficit di vuoto parte a Q~16 invece
   # che a Q~8.  D vs E = effetto di Lambda sul loop
+  # ATTENZIONE: E mescola Lambda e risoluzione (31 nodi p fissi su [0,8]) e non ha
+  # la correzione del troncamento.  Superato da F.
   E) sub E_good_p12_L8   30 "--pintmax 12 --bubble-lambda 8 --k-update-max 8" ;;
-  all) for j in A B C D E; do "$0" "$j"; done ;;
-  *) echo "uso: ./submit.sh A|B|C|D|E|all"; exit 1 ;;
+  # come D ma con la bolla fatta bene: Lambda=6 con risoluzione scalata (Delta p
+  # e densita' coerente come a Lambda=4) e il peso libero fuori dal disco
+  # aggiunto a mu fisico (test/fix_truncation.py).  Scan del 2026-09-24:
+  # Lambda 6 vs 8 cosi' differiscono <= 2.8 delta su ReGamma^-1(Q,0).
+  F) sub F_good_p12_L6fix 30 "--pintmax 12 --bubble-lambda 6 --p-nodes 46 --coherent-nk 144 --truncation-fix physical --k-update-max 8" ;;
+  all) for j in A B C D F; do "$0" "$j"; done ;;
+  *) echo "uso: ./submit.sh A|B|C|D|E|F|all"; exit 1 ;;
 esac

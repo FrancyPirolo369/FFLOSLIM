@@ -89,6 +89,16 @@ CONFIG = [
                                  "Lambda the whole vacuum ImPi (1/8) is missing and "
                                  "Gamma's bound state is pushed to threshold (measured "
                                  "2026-09-24).  Raising it shrinks q_table_max"),
+    ("truncation-fix", "none",   "none|physical|label: add to ImPi the free weight "
+                                 "outside the disk |k_up| < bubble_lambda before the KK "
+                                 "(test/fix_truncation.py).  physical = energies "
+                                 "k^2/m - (mu + sigma0), what the cube has at large k: "
+                                 "the validated choice (2026-09-24 Lambda scan)"),
+    ("p-nodes",      0,          "pairbuild --p-nodes (0 = profile default, 31 for "
+                                 "turbo on [0, Lambda]: scale it with Lambda or a larger "
+                                 "Lambda also means a coarser p grid)"),
+    ("coherent-nk",  0,          "pairbuild --coherent-nk (0 = profile default, 96 "
+                                 "for turbo on [0, Lambda]; scale it with Lambda too)"),
     ("k-update-max", 0.0,        "override k_update_max (0 = q_table_max - pintmax).  "
                                  "The tail channel (pair at Q<~3, fermion at p~k) "
                                  "needs pintmax >= k_update_max + ~3; the formula does "
@@ -355,12 +365,50 @@ def main(argv=None):
         if cfg["bubble_lambda"] != 4.0:
             # only when needed: a pairbuild without this option keeps working at 4
             cmd += ["--bubble-p-int-max", f"{cfg['bubble_lambda']:.15g}"]
+        if cfg["p_nodes"] > 0:
+            cmd += ["--p-nodes", str(cfg["p_nodes"])]
+        if cfg["coherent_nk"] > 0:
+            cmd += ["--coherent-nk", str(cfg["coherent_nk"])]
+        fix = cfg["truncation_fix"]
+        if fix != "none":
+            # pairbuild stops at impi/impi_table.npz; the fix and pair_gamma follow
+            cmd.append("--skip-pair")
         with open(os.path.join(itd, "pairbuild.log"), "w") as fh:
             rc = subprocess.run(cmd, env=env, cwd=HERE, stdout=fh,
                                 stderr=subprocess.STDOUT).returncode
         if rc:
             log(f"=== iter {i}: PAIRBUILD FAILED rc={rc} ===")
             return 1
+        if fix != "none":
+            impi = os.path.join(pb, "impi", "impi_table.npz")
+            fixed = os.path.join(pb, "impi", "impi_table_truncfix.npz")
+            steps = [
+                [sys.executable, os.path.join(HERE, "test", "fix_truncation.py"),
+                 "--mu-mode", fix, impi, fixed],
+                # identical to the pair_gamma call inside fflo/pairbuild.py
+                [sys.executable, "-m", "fflo.pair_gamma",
+                 "--no-plots", "--impi-table-path", fixed,
+                 "--kk-pad", "0", "--kk-oversample", "1", "--kk-tail", "zero",
+                 "--kk-tail-alpha", "nan", "--kk-max-n", "0",
+                 "--eta-gamma", "0.002", "--im-inv-sign-guard", "on",
+                 "--reference-mode", "proxy_residual",
+                 "--qp-residual-mode", "cross_inc", "--qpqp-source", "auto",
+                 "--qpqp-xi-cutoff", "0.015", "--qpqp-n-p", "5000",
+                 "--qpqp-n-phi", "24", "--residual-omega-taper-start", "0",
+                 "--residual-omega-taper-stop", "20",
+                 "--residual-omega-taper-mode", "qkin_cosine",
+                 "--out-dir", os.path.join(pb, "pair")],
+            ]
+            with open(os.path.join(itd, "truncfix_pair.log"), "w") as fh:
+                for step in steps:
+                    rc = subprocess.run(step, env=env, cwd=HERE, stdout=fh,
+                                        stderr=subprocess.STDOUT).returncode
+                    if rc:
+                        log(f"=== iter {i}: TRUNCATION FIX / PAIR_GAMMA FAILED rc={rc} ===")
+                        return 1
+            with open(os.path.join(itd, "truncfix_pair.log")) as fh:
+                note = [l.strip() for l in fh if l.startswith("Lambda=")]
+            log(f"=== iter {i} TRUNCFIX: {note[0] if note else '?'} ===")
 
         pair_table = os.path.join(pb, "pair", "pair_gamma_table.npz")
         t = np.load(pair_table)
