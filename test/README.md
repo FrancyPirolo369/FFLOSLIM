@@ -29,7 +29,7 @@ Il punto del 2026-09-24:
 | D | pair buona, PINTMAX 12 (k_upd 8) | coda calcolata davvero fino a k=8 |
 | E | D + Λ=8, Q_table 17, k_upd 8 | effetto di Λ sul loop (D vs E) |
 | F | D + Λ=6 con risoluzione scalata + fix del troncamento | effetto di Λ (pulito) |
-| G | D + Σ di contatto analitica e coda C/k⁴ oltre k=8 | la coda stale conta? (D vs G) |
+| G | D + Σ di contatto analitica e coda C/k⁴ oltre k=8, sigma_nomega 97 | coda pulita e plateau senza wiggles |
 
 **E richiede un `fflo/pairbuild.py` con l'opzione `--bubble-p-int-max`.** È
 una modifica del 2026-09-23 non ancora committata. A–D non la usano.

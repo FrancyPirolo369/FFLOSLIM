@@ -34,8 +34,11 @@ case "${1:-}" in
   # come D, ma oltre k_update_max=8 niente seed stale: Sigma analitica di contatto
   # Delta_inf^2/(w + xi_int) (righe risolte a due poli -> n(k) = C/k^4 esatto,
   # anche per le linee interne di Sigma a 8 < p < 12) e densita' = nucleo fino a 8
-  # + C/(2*8^2), con C della coppia della stessa iterazione.  D vs G = solo la coda.
-  G) sub G_good_p12_tail 30 "--pintmax 12 --k-update-max 8 --high-k-sigma pair-contact --contact-tail" ;;
+  # + C/(2*8^2), con C della coppia della stessa iterazione.  In piu' sigma_nomega
+  # 97 (il default del motore; qui era 41): i wiggles di n(k)k^4 in [3,8] sono il
+  # satellite di Tan campionato su 2-3 nodi omega (test/sigma_resolution_probe.py:
+  # errore per riga fino a 15% con 41, <=1.8% con 97, 0.3% con 240).
+  G) sub G_good_p12_tail 30 "--pintmax 12 --k-update-max 8 --high-k-sigma pair-contact --contact-tail --sigma-nomega 97" ;;
   all) for j in A B C D F; do "$0" "$j"; done ;;
   *) echo "uso: ./submit.sh A|B|C|D|E|F|G|all"; exit 1 ;;
 esac
