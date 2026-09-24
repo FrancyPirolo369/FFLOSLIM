@@ -53,6 +53,10 @@ case "${1:-}" in
   L4) sub L4_fix_taper   1 "--pintmax 12 --truncation-fix physical $SRC12" ;;
   L5) sub L5_delta1e4  1 "--pintmax 12 --delta 1e-4 $SRC12" ;;
   L) for j in L0 L1 L2 L3 L4 L5; do "$0" "$j"; done ;;
+  # il loop con il floor eta exact_zero, ripartendo da D it12: L1 a un passo ha
+  # portato l'eccesso fresco da +8.1/+1.8% a +1.5/+0.7% a contact invariato.
+  # Domanda: il punto fisso regge ed e' stabile?  Confronto diretto con D.
+  M) sub M_p12_etaexact 20 "--pintmax 12 --eta-floor exact_zero $SRC12" ;;
   all) for j in A B C D F; do "$0" "$j"; done ;;
-  *) echo "uso: ./submit.sh A|B|C|D|E|F|G|L0..L5|L|all"; exit 1 ;;
+  *) echo "uso: ./submit.sh A|B|C|D|E|F|G|L0..L5|L|M|all"; exit 1 ;;
 esac
