@@ -1,5 +1,5 @@
 #!/bin/bash
-# Matrice di test P=0.65 del 2026-09-24.  Uso:  ./submit.sh A|B|C|D|E|all
+# Matrice di test P=0.65 del 2026-09-24.  Uso:  ./submit.sh A|B|C|D|E|F|G|all
 # Ogni run parte dal seed warm di seeds/ e si auto-concatena fino a TARGET.
 # Tutto cio' che non e' scritto qui e' il default di CONFIG in test/run_test.py
 # (e finisce comunque in out/<TAG>/config.json).
@@ -31,6 +31,11 @@ case "${1:-}" in
   # aggiunto a mu fisico (test/fix_truncation.py).  Scan del 2026-09-24:
   # Lambda 6 vs 8 cosi' differiscono <= 2.8 delta su ReGamma^-1(Q,0).
   F) sub F_good_p12_L6fix 30 "--pintmax 12 --bubble-lambda 6 --p-nodes 46 --coherent-nk 144 --truncation-fix physical --k-update-max 8" ;;
+  # come D, ma oltre k_update_max=8 niente seed stale: Sigma analitica di contatto
+  # Delta_inf^2/(w + xi_int) (righe risolte a due poli -> n(k) = C/k^4 esatto,
+  # anche per le linee interne di Sigma a 8 < p < 12) e densita' = nucleo fino a 8
+  # + C/(2*8^2), con C della coppia della stessa iterazione.  D vs G = solo la coda.
+  G) sub G_good_p12_tail 30 "--pintmax 12 --k-update-max 8 --high-k-sigma pair-contact --contact-tail" ;;
   all) for j in A B C D F; do "$0" "$j"; done ;;
-  *) echo "uso: ./submit.sh A|B|C|D|E|F|all"; exit 1 ;;
+  *) echo "uso: ./submit.sh A|B|C|D|E|F|G|all"; exit 1 ;;
 esac

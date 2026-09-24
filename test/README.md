@@ -3,7 +3,7 @@
 Il core (`fflo/`, `run_fflo.py`) non è modificato. Qui c'è solo:
 
 - `run_test.py`: copia di `run_fflo.py` con le manopole dei test (vedi docstring)
-- `submit.sh A|B|C|D|E|all`: la matrice, da lanciare **da dentro `test/`**
+- `submit.sh A|B|C|D|E|F|G|all`: la matrice, da lanciare **da dentro `test/`**
 - `run.slurm`: un loop con ripresa, `--time-budget 215` e auto-concatenazione
 - `status.sh`: contact, shift, gap e n(k)k⁴ del minoritario per iterazione
 
@@ -28,6 +28,8 @@ Il punto del 2026-09-24:
 | C | B + shift congelato alla prima iterazione | è il re-pinning dello shift? |
 | D | pair buona, PINTMAX 12 (k_upd 8) | coda calcolata davvero fino a k=8 |
 | E | D + Λ=8, Q_table 17, k_upd 8 | effetto di Λ sul loop (D vs E) |
+| F | D + Λ=6 con risoluzione scalata + fix del troncamento | effetto di Λ (pulito) |
+| G | D + Σ di contatto analitica e coda C/k⁴ oltre k=8 | la coda stale conta? (D vs G) |
 
 **E richiede un `fflo/pairbuild.py` con l'opzione `--bubble-p-int-max`.** È
 una modifica del 2026-09-23 non ancora committata. A–D non la usano.

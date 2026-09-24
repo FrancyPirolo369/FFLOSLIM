@@ -32,6 +32,7 @@ RUNS = [  # (dir, etichetta)
     ("C_good_p6_frz", "C  pair buona, P6, shift congelato"),
     ("D_good_p12", "D  pair buona, P12"),
     ("F_good_p12_L6fix", "F  come D, Lambda6 + fix"),
+    ("G_good_p12_tail", "G  come D, coda di contatto oltre k=8"),
     ("p6_gfix", "p6_gfix  turbo, P6, congelato"),
     ("A_turbo_p6", "A  turbo, P6, ricalcolato"),
 ]
