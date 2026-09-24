@@ -46,8 +46,11 @@ case "${1:-}" in
   L0) sub L0_base      1 "--pintmax 12 $SRC12" ;;
   L1) sub L1_eta_exact 1 "--pintmax 12 --eta-floor exact_zero $SRC12" ;;
   L2) sub L2_noguard   1 "--pintmax 12 --im-sign-guard off $SRC12" ;;
-  L3) sub L3_notaper   1 "--pintmax 12 --taper-mode none $SRC12" ;;
-  L4) sub L4_taper60   1 "--pintmax 12 --taper-stop 60 $SRC12" ;;
+  # il taper si puo' togliere SOLO con il troncamento corretto: senza, il residuo
+  # grezzo vale 1/8 fino a |w|=240 (vuoto mancante fuori dal disco) e il KK misura
+  # l'artefatto (test/gamma_ladder_check.py, 2026-09-24).  L4 e' il controllo.
+  L3) sub L3_fix_notaper 1 "--pintmax 12 --truncation-fix physical --taper-mode none $SRC12" ;;
+  L4) sub L4_fix_taper   1 "--pintmax 12 --truncation-fix physical $SRC12" ;;
   L5) sub L5_delta1e4  1 "--pintmax 12 --delta 1e-4 $SRC12" ;;
   L) for j in L0 L1 L2 L3 L4 L5; do "$0" "$j"; done ;;
   all) for j in A B C D F; do "$0" "$j"; done ;;
