@@ -141,6 +141,10 @@ CONFIG = [
     ("angle-exact-cut", 1,       "SIGMA_PN_ANGLE_EXACT_CUT: exact p<=pmax cut in "
                                  "theta.  The legacy masked version is a step "
                                  "function on a uniform grid, error up to 9%"),
+    ("prune-keep",   0,          "keep the big files (next cubes, pairbuild tables) only for "
+                                 "the last N iterations; older ones are first summarised by "
+                                 "test/extract_snapshot.py + test/extract_sigma.py into "
+                                 "<out>/snap/.  0 = keep everything (~34 MB per iteration)"),
     ("contact-tail", False,      "replace the tail beyond k_update_max with C/k^4 "
                                  "instead of freezing the seed values"),
 ]
@@ -231,6 +235,35 @@ def grab(text, key):
 
 
 # ---------------------------------------------------------------------------
+def prune_old_iterations(out, current, keep, log):
+    """Summarise every finished iteration into <out>/snap, then delete the big
+    files of those older than the last `keep`.  Resume only needs the last
+    complete iteration's next_cubes, which is never touched."""
+    sys.path.insert(0, os.path.join(HERE, "test"))
+    import extract_snapshot
+    import extract_sigma
+    extract_snapshot.extract(out)
+    extract_sigma.extract(out)
+    freed = 0
+    for itd in sorted(glob.glob(os.path.join(out, "iter[0-9][0-9][0-9]"))):
+        j = int(os.path.basename(itd)[4:])
+        if j > current - keep:
+            continue
+        tag = os.path.basename(itd)[4:]
+        snap = os.path.join(out, "snap")
+        if not (os.path.exists(os.path.join(snap, f"iter{tag}.npz"))
+                and os.path.exists(os.path.join(snap, f"sigma{tag}.npz"))):
+            continue            # never delete what has not been summarised
+        for pat in ("next_cubes/*.npz", "pairbuild/impi/*.npz", "pairbuild/pair/*.npz",
+                    "pairbuild/control/*.npz", "pairbuild/impi/residual/*.npz",
+                    "density/*cubes*/*.npz"):
+            for f in glob.glob(os.path.join(itd, pat)):
+                freed += os.path.getsize(f)
+                os.remove(f)
+    if freed:
+        log(f"=== iter {current} PRUNE: freed {freed / 2**20:.0f} MB (kept last {keep}) ===")
+
+
 def main(argv=None):
     args = build_parser().parse_args(argv)
     cfg = {k: getattr(args, k) for k in DEFAULTS}
@@ -497,6 +530,11 @@ def main(argv=None):
         except Exception as exc:  # diagnostics must never kill the loop
             log(f"=== iter {i} NK4dn: unavailable ({exc}) ===")
         up, down = nu[0], nd[0]
+        if cfg["prune_keep"] > 0:
+            try:
+                prune_old_iterations(out, i, int(cfg["prune_keep"]), log)
+            except Exception as exc:  # disk hygiene must never kill the loop
+                log(f"=== iter {i} PRUNE: skipped ({exc}) ===")
 
     log("=== LOOP DONE ===")
     return 0

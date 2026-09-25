@@ -57,6 +57,17 @@ case "${1:-}" in
   # portato l'eccesso fresco da +8.1/+1.8% a +1.5/+0.7% a contact invariato.
   # Domanda: il punto fisso regge ed e' stabile?  Confronto diretto con D.
   M) sub M_p12_etaexact 20 "--pintmax 12 --eta-floor exact_zero $SRC12" ;;
+  # --- scansione in polarizzazione (2026-09-25).  Configurazione di M (PINTMAX 12,
+  # floor eta exact_zero, pair buona), partenza da fermioni LIBERI a mu_avg = 1:
+  # mu_up = 1 + P, mu_dn = 1 - P (test/make_free_seed.py).  P = 0.65 dal seed libero e'
+  # il controllo contro M (partito da D it12).  --prune-keep 2 tiene le cube solo delle
+  # ultime 2 iterazioni (le altre finiscono riassunte in out/<TAG>/snap/).
+  # I seed si generano qui: serve l'ambiente python caricato (module + venv).
+  P) for P in 0.10 0.20 0.30 0.40 0.50 0.60 0.65 0.70 0.80 0.90; do
+       tag="P${P/./p}"
+       python3 make_free_seed.py --P "$P" --out-dir "../seeds_free/$tag"
+       sub "${tag}_etaexact" 30 "--pintmax 12 --eta-floor exact_zero --seed-dir seeds_free/$tag --prune-keep 2"
+     done ;;
   all) for j in A B C D F; do "$0" "$j"; done ;;
-  *) echo "uso: ./submit.sh A|B|C|D|E|F|G|L0..L5|L|M|all"; exit 1 ;;
+  *) echo "uso: ./submit.sh A|B|C|D|E|F|G|L0..L5|L|M|P|all"; exit 1 ;;
 esac
