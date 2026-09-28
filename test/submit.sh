@@ -114,6 +114,26 @@ print(last, paths[0], paths[1])")
         sbatch --export=ALL,TAG="$tag",TARGET=30,ARGS="$HI_ARGS --up seeds_warm/$tag/A_komega_spinup_reseed.npz --down seeds_warm/$tag/A_komega_spindown_reseed.npz" \
                --job-name="slim_$tag" run.slurm
       done ;;
+  # --- PROD con Thouless al massimo globale (2026-09-28).  Anche a P <= 0.65 il massimo di
+  # ReGamma^-1(Q,0) sta a 1.03-1.1 qff e il pinning a qff lo lascia sopra zero (+4 delta,
+  # dg_c -0.05 a P = 0.1; +0.2 delta a 0.65).  Ricetta di PROD + global-max.  Ogni P
+  # riparte dall'ultima iterazione completa di out/P0pXX_prod se esiste (stesso P: le cube
+  # si copiano e basta), altrimenti da out/P0pXX_etaexact.  Tag P0pXX_prodg.
+  PRODG) for P in ${POLS:-0.10 0.20 0.30 0.40 0.50 0.60 0.65}; do
+       tag="P${P/./p}"
+       src="../out/${tag}_prod"
+       python3 -c "import run_test, sys; sys.exit(0 if run_test.last_complete_iteration('$src')[1] else 1)" \
+         || src="../out/${tag}_etaexact"
+       read -r it up down < <(python3 -c "import run_test
+last, paths = run_test.last_complete_iteration('$src')
+assert paths, 'nessuna iterazione completa in $src'
+print(last, paths[0], paths[1])")
+       mkdir -p "../seeds_warm/${tag}_prodg"
+       cp "$up" "../seeds_warm/${tag}_prodg/A_komega_spinup_reseed.npz"
+       cp "$down" "../seeds_warm/${tag}_prodg/A_komega_spindown_reseed.npz"
+       echo "  ${tag}_prodg: parte da $(basename "$src") iterazione $it"
+       sub "${tag}_prodg" 30 "--pintmax 12 --k-update-max 8 --eta-floor exact_zero --lattice-n-tail 100 --sigma-nomega 97 --high-k-sigma pair-contact --contact-tail --thouless-q-mode global-max --prune-keep 2 --up seeds_warm/${tag}_prodg/A_komega_spinup_reseed.npz --down seeds_warm/${tag}_prodg/A_komega_spindown_reseed.npz"
+     done ;;
   all) for j in A B C D F; do "$0" "$j"; done ;;
-  *) echo "uso: ./submit.sh A|B|C|D|E|F|G|L0..L5|L|M|P|PROD|HI|all"; exit 1 ;;
+  *) echo "uso: ./submit.sh A|B|C|D|E|F|G|L0..L5|L|M|P|PROD|PRODG|HI|all"; exit 1 ;;
 esac

@@ -69,3 +69,7 @@ della cube entro 0.02 punti percentuali); il passaggio lo fa `run.slurm` (variab
 Il Q scelto a ogni iterazione è nella riga PAIR di loop.log (colonna Q di status.sh) e
 in `snap/iterNNN.npz` (`q_selected`; `shift_used` è ora lo shift applicato da density).
 
+`./submit.sh PRODG`: PROD con `--thouless-q-mode global-max` (anche a P ≤ 0.65 il massimo
+non è a qff, vedi sopra).  Ogni P riparte dall'ultima iterazione completa di
+`out/P0pXX_prod` se c'è, altrimenti da `out/P0pXX_etaexact`; tag `P0pXX_prodg`.
+
