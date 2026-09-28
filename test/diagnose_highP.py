@@ -58,7 +58,35 @@ def analyse(z):
     A = np.asarray(s["A_pair"])
     occ = w <= 0.0
     per_q = -np.trapezoid(A[:, occ], w[occ], axis=1) * q / (2 * np.pi) / 4.0   # integrando del contact
-    return dict(q=q, re0=re0, qmax=q[j], remax=re0[j], per_q=per_q)
+    # poli stretti (non smorzati o quasi): radici di ReGamma^-1(Q,w) con larghezza
+    # |ImGamma^-1|/|pendenza| < 0.05.  Peso vero Z = 1/|pendenza| (paper, Eq. 17), contro il
+    # peso che la griglia cattura integrando A_pair in una finestra attorno.  Pesati in Q
+    # come il contact (Q dQ/2pi/4).
+    reS, imS = np.asarray(s["ReInvGamma"]), np.asarray(s["ImInvGamma"])
+    dq = np.gradient(q)
+    pole = {"neg_true": 0.0, "neg_got": 0.0, "pos_true": 0.0, "pos_got": 0.0}
+    sel = np.flatnonzero(np.abs(w) < 8.0)
+    for i in range(q.size):
+        if q[i] > 4.0:
+            continue
+        re, im = reS[i, sel], imS[i, sel]
+        for c in np.flatnonzero(np.diff(np.sign(re)) != 0):
+            a0, b0 = sel[c], sel[c] + 1
+            slope = (reS[i, b0] - reS[i, a0]) / (w[b0] - w[a0])
+            if slope == 0.0:
+                continue
+            ws = w[a0] - reS[i, a0] / slope
+            width = abs(np.interp(ws, w, imS[i])) / abs(slope)
+            if width > 0.05:
+                continue
+            h = max(3 * width, 0.02)
+            win = (w > ws - h) & (w < ws + h)
+            got = abs(np.trapezoid(A[i, win], w[win])) if win.sum() > 1 else 0.0
+            wt = q[i] * dq[i] / (2 * np.pi) / 4.0
+            key = "neg" if ws < 0 else "pos"
+            pole[key + "_true"] += wt / abs(slope)
+            pole[key + "_got"] += wt * got
+    return dict(q=q, re0=re0, qmax=q[j], remax=re0[j], per_q=per_q, pole=pole)
 
 
 def band(q, f, a, b):
@@ -100,10 +128,13 @@ def main(argv):
                 fd = float(g["dr_alpha_1_density_down"]) / (mud / 2) - 1
                 fu = float(g["dr_alpha_1_density_up"]) / (muu / 2) - 1
             rows.append((it, r, z))
+            pl = r["pole"]
             print(f" {it:2d}  {float(z['pair_contact']):6.3f}  {float(z['shift_used']):+.4f}   "
                   f"{r['remax'] / DELTA:+9.1f} a Q={r['qmax']:.3f}          |"
                   f"   {fr[0]:5.1%}   {fr[1]:5.1%}  {fr[2]:5.1%} |"
-                  f"  {s0d:+.3f} / {s0u:+.3f} | {fd:+7.1%} / {fu:+6.1%}")
+                  f"  {s0d:+.3f} / {s0u:+.3f} | {fd:+7.1%} / {fu:+6.1%} |"
+                  f" poli stretti w<0 vero/preso {pl['neg_true']:.3f}/{pl['neg_got']:.3f}"
+                  f"  w>0 {pl['pos_true']:.3f}/{pl['pos_got']:.3f}")
         # grafico: profilo, contact per Q, n_dn(k), k^2 n_dn
         n = len(rows)
         fig, ax = plt.subplots(1, 4, figsize=(18, 4.2), layout="constrained")
