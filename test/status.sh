@@ -12,14 +12,15 @@ for L in out/*/loop.log; do
   grep -h "frozen at" "$L" | head -1 | sed 's/=== //; s/ ===//; s/^/    /'
   awk '
     / PAIR: / { split($0,a,"contact="); split(a[2],b," "); it=$3; c[it]=b[1]
-                split($0,s,"shift="); split(s[2],t," "); sh[it]=t[1] }
+                split($0,s,"shift="); split(s[2],t," "); sh[it]=t[1]
+                if (index($0, " Q=")) { split($0,g," Q="); split(g[2],h," "); qs[it]=h[1] } }
     / GAP: /  { it=$3; split($0,u,"up="); split(u[2],v," "); gu[it]=v[1]
                 split($0,d,"down="); split(d[2],e," "); gd[it]=e[1] }
     / NK4dn: /{ it=$3; x=$0; sub(/.*NK4dn: /,"",x); sub(/ ===.*/,"",x); nk[it]=x }
     / TIME: / { it=$3; tm[it]=$5 }
-    END { printf "    %-4s %-10s %-11s %-11s %-11s %-6s %s\n","it","contact","shift","gap_up","gap_down","min","n(k)k^4 dn"
+    END { printf "    %-4s %-10s %-11s %-7s %-11s %-11s %-6s %s\n","it","contact","shift","Q","gap_up","gap_down","min","n(k)k^4 dn"
           for (i=1;i<=1000;i++) if (i in c)
-            printf "    %-4d %-10s %-11s %-11s %-11s %-6s %s\n", i, c[i], sh[i], gu[i], gd[i], tm[i], nk[i] }' "$L"
+            printf "    %-4d %-10s %-11s %-7s %-11s %-11s %-6s %s\n", i, c[i], sh[i], qs[i], gu[i], gd[i], tm[i], nk[i] }' "$L"
   grep -h -E "FAILED|stopping before|LOOP DONE" "$L" | tail -2 | sed 's/^/    /'
 done
 echo; echo "================== ERRORI =================="

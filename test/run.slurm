@@ -43,3 +43,26 @@ if [ "${AUTOCHAIN:-1}" = "1" ] && [ "$DONE" -lt "$TARGET" ]; then
   sbatch --export=ALL,TAG="$TAG",TARGET="$TARGET",ARGS="$ARGS" \
          --job-name="slim_$TAG" run.slurm
 fi
+
+# Scaletta in P (target HI di submit.sh).  LADDER = P successivi ("0.80 0.90"),
+# LADDER_ARGS = manopole senza --up/--down, LADDER_SUFFIX = suffisso dei tag.  Finito
+# questo P, il successivo riparte dalla sua ultima iterazione con la griglia k rifatta
+# sui kF nuovi (test/reseed_regrid.py).  Cancello: se all'ultima iterazione il gap di
+# densita' del minoritario supera LADDER_MAXGAP (%, default 10) la scaletta si ferma.
+if [ -n "${LADDER:-}" ] && [ "$DONE" -ge "$TARGET" ]; then
+  GAP=$(grep -o "GAP: up=[^ ]* down=[^ ]*" "out/$TAG/loop.log" | tail -1 | sed 's/.*down=//; s/%//')
+  if python3 -c "import sys; sys.exit(abs(float('$GAP')) > float('${LADDER_MAXGAP:-10}'))"; then
+    read -r NEXT REST <<< "$LADDER"
+    NTAG="P${NEXT/./p}_${LADDER_SUFFIX:-ladder}"
+    read -r _ UP DN < <(python3 -c "import sys; sys.path.insert(0, 'test'); import run_test
+last, paths = run_test.last_complete_iteration('out/$TAG'); print(last, *paths)")
+    python3 test/reseed_regrid.py --up "$UP" --down "$DN" --P "$NEXT" --out-dir "seeds_warm/$NTAG"
+    echo "== $TAG finito (gap down $GAP%): scaletta -> $NTAG, poi: ${REST:-fine} =="
+    export LADDER="$REST"     # ALL lo porta al job nuovo (e alle sue continuazioni)
+    cd "$SLURM_SUBMIT_DIR"
+    sbatch --export=ALL,TAG="$NTAG",TARGET="$TARGET",ARGS="$LADDER_ARGS --up seeds_warm/$NTAG/A_komega_spinup_reseed.npz --down seeds_warm/$NTAG/A_komega_spindown_reseed.npz" \
+           --job-name="slim_$NTAG" run.slurm
+  else
+    echo "== $TAG: gap down $GAP% oltre ${LADDER_MAXGAP:-10}%: scaletta FERMATA (restavano: $LADDER) =="
+  fi
+fi

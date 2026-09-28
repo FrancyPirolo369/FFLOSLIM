@@ -8,7 +8,10 @@ Per ogni out/<RUN>/iterNNN completa scrive out/<RUN>/snap/iterNNN.npz con:
                                        congelato density scrive il valore IMPOSTO)
   reinv_qff_raw                        ReGamma^-1(qff, w~0) letto dalla tabella:
                                        distanza vera dalla criticita' anche a g fisso
-  shift_used                           frozen_shift.txt se congelato, altrimenti = raw
+  shift_used                           frozen_shift.txt se congelato, altrimenti lo shift
+                                       applicato da density (pair_raw_thouless_shift, al
+                                       Q scelto: qff o massimo globale); raw se manca
+  q_selected                           il Q dove density ha imposto Thouless
 Pochi MB per iterazione invece di ~20.  Le iterazioni gia' estratte sono saltate.
 
 Uso (dalla radice del bundle/SLIM):  python3 test/extract_snapshot.py [RUN ...]
@@ -79,15 +82,17 @@ def extract(run_dir):
         q_t, w_t = np.asarray(t["q"]), np.asarray(t["omega"])
         raw = float(np.interp(qff, q_t, np.asarray(t["ReInvGamma"])[:, int(np.argmin(np.abs(w_t)))]))
         fz = frozen(run_dir)
+        logged = grab(txt, "pair_raw_thouless_shift")
         np.savez_compressed(
             dst, k=k, n_up=n_up, k_dn=k2, n_dn=n_dn,
             q=np.asarray(t["q"]), omega=np.asarray(t["omega"]),
             ReInvGamma=np.asarray(t["ReInvGamma"], dtype=np.float32),
             ImInvGamma=np.asarray(t["ImInvGamma"], dtype=np.float32),
             pair_contact=grab(txt, "pair_contact"),
-            logged_shift=grab(txt, "pair_raw_thouless_shift"),
+            logged_shift=logged,
             reinv_qff_raw=raw, qff=qff,
-            shift_used=fz if np.isfinite(fz) else raw)
+            q_selected=grab(txt, "pair_q_selected"),
+            shift_used=fz if np.isfinite(fz) else (logged if np.isfinite(logged) else raw))
         done += 1
     return done
 

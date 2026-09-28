@@ -144,8 +144,11 @@ CONFIG = [
                                  "(engine default is 8)"),
 
     # --- physics modes -----------------------------------------------------
-    ("thouless-q-mode", "qff",   "where the Thouless condition is imposed.  Use qff; "
-                                 "global-max pins Q~0.15 and collapses n_down by 80%"),
+    ("thouless-q-mode", "qff",   "where the Thouless condition is imposed: qff or "
+                                 "global-max (max of ReGamma^-1(Q,0) over all Q).  Up to "
+                                 "P=0.65 they coincide (dg <= 0.004); from P~0.7 the "
+                                 "max moves to Q~0 and qff leaves it supercritical "
+                                 "(runaway at P>=0.8): use global-max there"),
     ("eta-floor",    "broad",    "eta floor mode"),
     ("high-k-sigma", "stale",    "what to do beyond k_update_max: stale|pair-contact"),
     ("ring-mode",    "exact_window", "SIGMA_PN_RING_MODE; exact_window is the "
@@ -539,8 +542,9 @@ def main(argv=None):
         ratio = pc / contacts[-1] if contacts else float("nan")
         contacts.append(pc)
         raw_shift = grab(txt, "pair_raw_thouless_shift ")
+        q_sel = grab(txt, "pair_q_selected ")
         log(f"=== iter {i} PAIR: contact={pc:.6f} (x{ratio:.4f} vs previous) "
-            f"shift={raw_shift:+.6f}"
+            f"shift={raw_shift:+.6f} Q={q_sel:.4f}"
             f"{' FROZEN=' + env['PAIR_SHIFT_FIXED'] if 'PAIR_SHIFT_FIXED' in env else ''} ===")
         if cfg["pair_shift_freeze"] and frozen_shift() is None and np.isfinite(raw_shift):
             with open(frozen_path, "w") as fh:

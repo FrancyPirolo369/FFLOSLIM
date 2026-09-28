@@ -75,7 +75,8 @@ case "${1:-}" in
   # reticolo con 100 nodi in coda, Lambda 4 + taper (default), floor exact_zero,
   # PINTMAX 12 / k_update 8, Sigma 24 k x 97 w con ring exact_window (default), coda di
   # contatto analitica oltre k = 8, alpha 0.3.  Serve l'ambiente python caricato.
-  PROD) for P in ${POLS:-0.10 0.20 0.30 0.40 0.50 0.60 0.65 0.70 0.80 0.90}; do
+  # Sopra P = 0.65 NON usare PROD (pinning a qff): vedi HI.
+  PROD) for P in ${POLS:-0.10 0.20 0.30 0.40 0.50 0.60 0.65}; do
        tag="P${P/./p}"
        case "$P" in 0.80|0.90) src="../out/P0p70_etaexact" ;; *) src="../out/${tag}_etaexact" ;; esac
        read -r it up down < <(python3 -c "import run_test
@@ -86,6 +87,32 @@ print(last, paths[0], paths[1])")
        echo "  $tag: parte da $(basename "$src") iterazione $it"
        sub "${tag}_prod" 30 "--pintmax 12 --k-update-max 8 --eta-floor exact_zero --lattice-n-tail 100 --sigma-nomega 97 --high-k-sigma pair-contact --contact-tail --prune-keep 2 --up seeds_warm/$tag/A_komega_spinup_reseed.npz --down seeds_warm/$tag/A_komega_spindown_reseed.npz"
      done ;;
+  # --- alta P (2026-09-28): Thouless al massimo GLOBALE di ReGamma^-1(Q,0).  Sopra
+  # P ~ 0.7 la cuspide FFLO a qff sparisce (il salto di n_dn a kF_dn crolla a ~0.1) e il
+  # massimo passa a Q ~ 0: col pinning a qff quel canale resta supercritico, poli a
+  # Omega < 0 = molecole occupate, C e n_dn scappano (test/diagnose_highP.py sulla
+  # scansione P: a P = 0.8 C = 2.9, n_dn +160%).  Fino a P = 0.65 global-max e qff danno
+  # lo stesso g_c entro 0.004.  Ricetta di PROD + global-max.  Due scalette in parallelo
+  # da P = 0.65 (HI_SRC, default out/P0p65_etaexact): 0.70 -> 0.80 -> 0.90 e
+  # 0.75 -> 0.85.  Ogni gradino riparte dall'ultima iterazione del precedente con la
+  # griglia k rifatta sui kF nuovi (test/reseed_regrid.py; il passaggio lo fa run.slurm)
+  # e la scaletta si ferma se il gap del minoritario supera il 10%.
+  HI) HI_ARGS="--pintmax 12 --k-update-max 8 --eta-floor exact_zero --lattice-n-tail 100 --sigma-nomega 97 --high-k-sigma pair-contact --contact-tail --thouless-q-mode global-max --prune-keep 2"
+      src="${HI_SRC:-../out/P0p65_etaexact}"
+      read -r it up down < <(python3 -c "import run_test
+last, paths = run_test.last_complete_iteration('$src')
+assert paths, 'nessuna iterazione completa in $src'
+print(last, paths[0], paths[1])")
+      for chain in "${HI_CHAIN_A-0.70 0.80 0.90}" "${HI_CHAIN_B-0.75 0.85}"; do
+        [ -n "$chain" ] || continue
+        read -r P rest <<< "$chain"
+        tag="P${P/./p}_gmax"
+        python3 reseed_regrid.py --up "$up" --down "$down" --P "$P" --out-dir "../seeds_warm/$tag"
+        echo "  $tag: parte da $(basename "$src") iterazione $it; poi: ${rest:-fine}"
+        export LADDER="$rest" LADDER_ARGS="$HI_ARGS" LADDER_SUFFIX=gmax
+        sbatch --export=ALL,TAG="$tag",TARGET=30,ARGS="$HI_ARGS --up seeds_warm/$tag/A_komega_spinup_reseed.npz --down seeds_warm/$tag/A_komega_spindown_reseed.npz" \
+               --job-name="slim_$tag" run.slurm
+      done ;;
   all) for j in A B C D F; do "$0" "$j"; done ;;
-  *) echo "uso: ./submit.sh A|B|C|D|E|F|G|L0..L5|L|M|P|PROD|all"; exit 1 ;;
+  *) echo "uso: ./submit.sh A|B|C|D|E|F|G|L0..L5|L|M|P|PROD|HI|all"; exit 1 ;;
 esac

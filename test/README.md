@@ -38,10 +38,33 @@ Il criterio di convergenza è il contact (riga PAIR), non il gap.
 
 ## Produzione (2026-09-28)
 
-`./submit.sh PROD` (con modulo e venv caricati): per ogni P riparte dalla soluzione
-convergente della scansione `P0pXX_etaexact` (0.80 e 0.90 da 0.70, `reseed_mu.py`) con
+`./submit.sh PROD` (con modulo e venv caricati): per ogni P fino a 0.65 riparte dalla
+soluzione convergente della scansione `P0pXX_etaexact` con
 la ricetta validata: pair `zero_and_thresholds`, reticolo con 100 nodi in coda, Λ = 4
 con taper, `exact_zero`, PINTMAX 12 / k_update 8, Σ 24 k × 97 ω con ring, coda di
 contatto analitica oltre k = 8, α = 0.3, `--prune-keep 2`.  Sottoinsieme di P con
 `POLS="0.40 0.50" ./submit.sh PROD`.  Correzioni a posteriori da applicare a g_c:
 taper/Λ (costruzione alla Enss, ~+0.03–0.04 a P = 0.65) e δ → 0 (≈ −0.013).
+
+## Alta P: Thouless al massimo globale (2026-09-28)
+
+`test/diagnose_highP.py` sulla scansione P: il salto di n_dn a kF_dn (~ Z del
+minoritario) crolla con P (0.39 a P = 0.3, 0.12 a 0.65, 0.08 a 0.8) e con lui la
+cuspide FFLO di ReΓ⁻¹(Q,0) a qff; il fondo liscio favorisce Q = 0.  Margine
+max(Q < 0.8 qff) − picco(qff): −7δ a P = 0.3, −0.5δ a 0.65, +0.3δ a 0.7, +5.9δ a 0.8,
++8.7δ a 0.9.  Col pinning a qff il canale Q ≈ 0 resta supercritico → poli a Ω < 0
+(molecole occupate) → C e n_dn scappano (P = 0.8: C = 2.9, n_dn +160%).  Non è
+l'integrazione: il peso vero dei poli a Ω < 0 supera quello catturato dalla griglia,
+integrare meglio peggiorerebbe.  Fino a P = 0.65 `global-max` e `qff` danno lo stesso
+g_c entro 0.004 (ripinnando le stesse tabelle).
+
+`./submit.sh HI`: ricetta di PROD + `--thouless-q-mode global-max`, due scalette in
+parallelo da `out/P0p65_etaexact` (o `HI_SRC`): 0.70 → 0.80 → 0.90 e 0.75 → 0.85
+(`HI_CHAIN_A`, `HI_CHAIN_B`; vuota = spenta).  Ogni gradino riparte dall'ultima
+iterazione del precedente con `reseed_regrid.py` (griglia k rifatta sui kF nuovi, A
+ricostruita con `fflo.density.pole_aware_rebuild`; a P invariato riproduce la densità
+della cube entro 0.02 punti percentuali); il passaggio lo fa `run.slurm` (variabili
+`LADDER`, `LADDER_ARGS`, `LADDER_SUFFIX`) e si ferma se |gap down| > `LADDER_MAXGAP` = 10%.
+Il Q scelto a ogni iterazione è nella riga PAIR di loop.log (colonna Q di status.sh) e
+in `snap/iterNNN.npz` (`q_selected`; `shift_used` è ora lo shift applicato da density).
+
