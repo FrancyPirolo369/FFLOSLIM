@@ -119,6 +119,18 @@ CONFIG = [
                                  "cost is sigma_nk * sigma_nomega per spin"),
     ("n-theta",      32,         "angular nodes in the density stage"),
     ("profile",      "turbo",    "pairbuild quadrature preset: turbo|quick|gold"),
+    ("lattice-n-tail", 0,         "pairbuild lattice tail nodes; 0 keeps the profile "
+                                 "default (turbo 20, quick 45, gold 70)"),
+    ("omega-feature-half-width", -1.0,
+                                 "half-width of each pair omega feature window; negative "
+                                 "keeps the legacy |mu_up-mu_dn|+0.05 choice"),
+    ("omega-feature-nodes", 0,    "nodes in each pair omega feature window; 0 keeps the "
+                                 "legacy profile choice (turbo 21, otherwise 81)"),
+    ("omega-feature-q-min", -1.0, "lower Q used to generate omega features; negative = all"),
+    ("omega-feature-q-max", -1.0, "upper Q used to generate omega features; negative = all"),
+    ("omega-feature-q-max-points", 0,
+                                 "maximum representative Q values used to generate omega "
+                                 "features; 0 = all"),
     ("omega-mode",   "zero_and_thresholds",
                                  "pair omega features: zero|zero_and_thresholds|"
                                  "paper_thresholds.  zero (141 nodes) has no node near "
@@ -394,14 +406,37 @@ def main(argv=None):
         q_grid = np.unique(np.concatenate([q_core, q_tail]))
 
         pb = os.path.join(itd, "pairbuild")
+        feature_half_width = (
+            cfg["omega_feature_half_width"]
+            if cfg["omega_feature_half_width"] >= 0.0
+            else abs(mu_up - mu_dn) + 0.05
+        )
+        feature_nodes = (
+            cfg["omega_feature_nodes"]
+            if cfg["omega_feature_nodes"] > 0
+            else (21 if cfg["profile"] == "turbo" else 81)
+        )
+        log(f"=== iter {i} START PAIRBUILD: profile={cfg['profile']} "
+            f"Lambda={cfg['bubble_lambda']:g} p_nodes={cfg['p_nodes'] or 'profile'} "
+            f"omega_feature={cfg['omega_mode']} width={feature_half_width:g} "
+            f"nodes={feature_nodes} max_q_points={cfg['omega_feature_q_max_points']} ===")
         cmd = [sys.executable, "-m", "fflo.pairbuild",
                "--up", up, "--down", down, "--out-dir", pb,
                "--workers", str(cfg["workers"]), "--profile", cfg["profile"],
                "--q-points", ",".join(f"{v:.15g}" for v in q_grid),
                "--q-table-max", f"{q_table_max:.15g}",
                "--omega-feature-mode", cfg["omega_mode"],
-               "--omega-feature-half-width", f"{abs(mu_up - mu_dn) + 0.05:.6f}",
-               "--omega-feature-nodes", "21" if cfg["profile"] == "turbo" else "81"]
+               "--omega-feature-half-width", f"{feature_half_width:.15g}",
+               "--omega-feature-nodes", str(feature_nodes)]
+        if cfg["lattice_n_tail"] > 0:
+            cmd += ["--lattice-n-tail", str(cfg["lattice_n_tail"])]
+        if cfg["omega_feature_q_min"] >= 0.0:
+            cmd += ["--omega-feature-q-min", f"{cfg['omega_feature_q_min']:.15g}"]
+        if cfg["omega_feature_q_max"] >= 0.0:
+            cmd += ["--omega-feature-q-max", f"{cfg['omega_feature_q_max']:.15g}"]
+        if cfg["omega_feature_q_max_points"] > 0:
+            cmd += ["--omega-feature-q-max-points",
+                    str(cfg["omega_feature_q_max_points"])]
         if cfg["bubble_lambda"] != 4.0:
             # only when needed: a pairbuild without this option keeps working at 4
             cmd += ["--bubble-p-int-max", f"{cfg['bubble_lambda']:.15g}"]

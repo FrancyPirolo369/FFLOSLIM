@@ -52,6 +52,8 @@ def main():
     ap.add_argument("--n-theta", type=int, default=32)
     ap.add_argument("--workers", type=int, default=8)
     ap.add_argument("--delta", type=float, default=1.0e-3)
+    ap.add_argument("--floor", default="broad", choices=("broad", "exact_zero"),
+                    help="floor eta della pair spostata (come density --eta-floor-mode)")
     a = ap.parse_args()
 
     # stesse variabili che test/run_test.py passa a density (lette a runtime)
@@ -78,7 +80,7 @@ def main():
     q_t, w_t = np.asarray(pair["q"]), np.asarray(pair["omega"])
     iq = int(np.argmin(np.abs(q_t - qff)))
     shifted = apply_shift_to_pair_table(pair, float(q_t[iq]), subcritical_delta=a.delta,
-                                        eta_floor_mode="broad")
+                                        eta_floor_mode=a.floor)
 
     # nodi omega di produzione: stessa costruzione di density.py
     w_base = np.asarray(seeds["up"]["w"], dtype=float)

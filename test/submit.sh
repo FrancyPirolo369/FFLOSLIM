@@ -68,6 +68,24 @@ case "${1:-}" in
        python3 make_free_seed.py --P "$P" --out-dir "../seeds_free/$tag"
        sub "${tag}_etaexact" 30 "--pintmax 12 --eta-floor exact_zero --seed-dir seeds_free/$tag --prune-keep 2"
      done ;;
+  # --- PRODUZIONE (2026-09-28): ricetta validata, ripartenza a caldo dalla scansione P.
+  # Ogni P riparte dall'ultima iterazione completa di out/P0pXX_etaexact (0.80 e 0.90
+  # da P = 0.70 con i mu cambiati: test/reseed_mu.py; in quella scansione erano finiti
+  # su un punto fisso non fisico).  Ricetta: pair zero_and_thresholds (default),
+  # reticolo con 100 nodi in coda, Lambda 4 + taper (default), floor exact_zero,
+  # PINTMAX 12 / k_update 8, Sigma 24 k x 97 w con ring exact_window (default), coda di
+  # contatto analitica oltre k = 8, alpha 0.3.  Serve l'ambiente python caricato.
+  PROD) for P in ${POLS:-0.10 0.20 0.30 0.40 0.50 0.60 0.65 0.70 0.80 0.90}; do
+       tag="P${P/./p}"
+       case "$P" in 0.80|0.90) src="../out/P0p70_etaexact" ;; *) src="../out/${tag}_etaexact" ;; esac
+       read -r it up down < <(python3 -c "import run_test
+last, paths = run_test.last_complete_iteration('$src')
+assert paths, 'nessuna iterazione completa in $src'
+print(last, paths[0], paths[1])")
+       python3 reseed_mu.py --up "$up" --down "$down" --P "$P" --out-dir "../seeds_warm/$tag"
+       echo "  $tag: parte da $(basename "$src") iterazione $it"
+       sub "${tag}_prod" 30 "--pintmax 12 --k-update-max 8 --eta-floor exact_zero --lattice-n-tail 100 --sigma-nomega 97 --high-k-sigma pair-contact --contact-tail --prune-keep 2 --up seeds_warm/$tag/A_komega_spinup_reseed.npz --down seeds_warm/$tag/A_komega_spindown_reseed.npz"
+     done ;;
   all) for j in A B C D F; do "$0" "$j"; done ;;
-  *) echo "uso: ./submit.sh A|B|C|D|E|F|G|L0..L5|L|M|P|all"; exit 1 ;;
+  *) echo "uso: ./submit.sh A|B|C|D|E|F|G|L0..L5|L|M|P|PROD|all"; exit 1 ;;
 esac

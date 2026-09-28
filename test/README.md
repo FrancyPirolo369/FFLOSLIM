@@ -35,3 +35,13 @@ Il punto del 2026-09-24:
 una modifica del 2026-09-23 non ancora committata. A–D non la usano.
 
 Il criterio di convergenza è il contact (riga PAIR), non il gap.
+
+## Produzione (2026-09-28)
+
+`./submit.sh PROD` (con modulo e venv caricati): per ogni P riparte dalla soluzione
+convergente della scansione `P0pXX_etaexact` (0.80 e 0.90 da 0.70, `reseed_mu.py`) con
+la ricetta validata: pair `zero_and_thresholds`, reticolo con 100 nodi in coda, Λ = 4
+con taper, `exact_zero`, PINTMAX 12 / k_update 8, Σ 24 k × 97 ω con ring, coda di
+contatto analitica oltre k = 8, α = 0.3, `--prune-keep 2`.  Sottoinsieme di P con
+`POLS="0.40 0.50" ./submit.sh PROD`.  Correzioni a posteriori da applicare a g_c:
+taper/Λ (costruzione alla Enss, ~+0.03–0.04 a P = 0.65) e δ → 0 (≈ −0.013).
