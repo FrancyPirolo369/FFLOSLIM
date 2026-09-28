@@ -12,6 +12,10 @@ per punto; 0 = interpolante).  --exclude toglie delle P (default 0.5: in oversho
 Campo medio (T = 0, soglia FFLO): P_c = eps0 sqrt(2/eps0 - 1) = sqrt(eps0 (2 - eps0)), con
 g = ln(eps0/2)/2 (la stessa relazione eps0 <-> g dei punti numerici), eps0 in (0, 1].
 
+NSCT (T-matrix non autoconsistente): test/data/nsct_critical_line.txt, due rami (debole,
+P <= 0.1 per g <= -0.8; forte, da g = 0.2 fino a P ~ 1).  Densita' fissata: la sua
+normalizzazione di eps0 coincide con mu_avg = 1 solo ad accoppiamento debole.
+
 FFLO30: r30b_pull/critical_line_status.txt (scansione r30 0.05-0.40 e continuazioni r30b
 0.35-0.70, 9-12 iterazioni; stessa formula di g_c, eps0 = 1).  Il punto a P = 0.70 ha
 ReGamma^-1(qff) < 0 (canale q ~ 0 gia' vincente): escluso salvo --fflo30-all.
@@ -35,7 +39,7 @@ import matplotlib.pyplot as plt
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 INK, MUTED, GRID = "#1f1f1e", "#6b6b68", "#e4e3df"
-C_NEW, C_F30, C_SCAN, C_MF = "#eb6834", "#2a78d6", "#6b6b68", "#1baf7a"
+C_NEW, C_F30, C_SCAN, C_MF, C_NSCT = "#eb6834", "#2a78d6", "#6b6b68", "#1baf7a", "#e87ba4"
 MARK = {"prodg": "D", "gmax": "^", "prod": "s", "etaexact": "o"}
 plt.rcParams.update({
     "figure.facecolor": "#fcfcfb", "axes.facecolor": "#fcfcfb", "axes.edgecolor": MUTED,
@@ -119,6 +123,9 @@ def main(argv):
                                                      "critical_line_status.txt"))
     ap.add_argument("--fflo30-all", action="store_true")
     ap.add_argument("--no-mean-field", action="store_true")
+    ap.add_argument("--nsct", default=os.path.join(HERE, "test", "data", "nsct_critical_line.txt"),
+                    help="file NSCT ('' = non disegnarlo)")
+    ap.add_argument("--xlim", default="-3.6,2.0")
     ap.add_argument("--out", default=os.path.join(HERE, "out", "cluster", "plots", "phase_diagram.png"))
     a = ap.parse_args(argv)
     from scipy.interpolate import UnivariateSpline
@@ -137,6 +144,12 @@ def main(argv):
         eps0 = np.geomspace(1e-4, 1.0, 600)
         ax.plot(0.5 * np.log(eps0 / 2.0), eps0 * np.sqrt(2.0 / eps0 - 1.0), "-", color=C_MF,
                 lw=1.4, label="campo medio")
+    if a.nsct and os.path.exists(a.nsct):
+        d = np.loadtxt(a.nsct)
+        d = d[np.argsort(d[:, 2])]
+        cut = np.flatnonzero(np.diff(d[:, 2]) > 0.5) + 1          # rami separati da un buco in g
+        for i, br in enumerate(np.split(d, cut)):
+            ax.plot(br[:, 2], br[:, 3], "-.", color=C_NSCT, lw=1.5, label="NSCT" if i == 0 else None)
     if os.path.exists(a.fflo30):
         f30 = read_fflo30(a.fflo30, a.fflo30_all)
         ps = sorted(f30)
@@ -165,7 +178,8 @@ def main(argv):
         ax.annotate(f"it {r['it']}", (r["g"], r["p"]), textcoords="offset points",
                     xytext=(7, -3), fontsize=7, color=MUTED)
     ymax = max([r["p"] for r in keep] + [0.7]) + 0.08
-    ax.set(xlabel="g_c", ylabel="P", ylim=(0, ymax), xlim=(-3.6, 0.5),
+    x0, x1 = (float(v) for v in a.xlim.split(","))
+    ax.set(xlabel="g_c", ylabel="P", ylim=(0, ymax), xlim=(x0, x1),
            title="Linea critica (Thouless) del gas di Fermi 2D polarizzato")
     ax.legend(fontsize=8, loc="upper left")
     if excl:
