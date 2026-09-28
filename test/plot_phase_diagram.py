@@ -9,6 +9,9 @@ ordine per pinnare il massimo globale di ReGamma^-1(Q,0) (dall'ultima snapshot).
 Sul risultato nuovo una spline cubica di smoothing g(P) (--smooth = scarto tipico atteso
 per punto; 0 = interpolante).  --exclude toglie delle P (default 0.5: in overshoot).
 
+Campo medio (T = 0, soglia FFLO): P_c = eps0 sqrt(2/eps0 - 1) = sqrt(eps0 (2 - eps0)), con
+g = ln(eps0/2)/2 (la stessa relazione eps0 <-> g dei punti numerici), eps0 in (0, 1].
+
 FFLO30: r30b_pull/critical_line_status.txt (scansione r30 0.05-0.40 e continuazioni r30b
 0.35-0.70, 9-12 iterazioni; stessa formula di g_c, eps0 = 1).  Il punto a P = 0.70 ha
 ReGamma^-1(qff) < 0 (canale q ~ 0 gia' vincente): escluso salvo --fflo30-all.
@@ -32,7 +35,7 @@ import matplotlib.pyplot as plt
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 INK, MUTED, GRID = "#1f1f1e", "#6b6b68", "#e4e3df"
-C_NEW, C_F30, C_SCAN = "#eb6834", "#2a78d6", "#6b6b68"
+C_NEW, C_F30, C_SCAN, C_MF = "#eb6834", "#2a78d6", "#6b6b68", "#1baf7a"
 MARK = {"prodg": "D", "gmax": "^", "prod": "s", "etaexact": "o"}
 plt.rcParams.update({
     "figure.facecolor": "#fcfcfb", "axes.facecolor": "#fcfcfb", "axes.edgecolor": MUTED,
@@ -115,6 +118,7 @@ def main(argv):
     ap.add_argument("--fflo30", default=os.path.join(os.path.dirname(HERE), "r30b_pull",
                                                      "critical_line_status.txt"))
     ap.add_argument("--fflo30-all", action="store_true")
+    ap.add_argument("--no-mean-field", action="store_true")
     ap.add_argument("--out", default=os.path.join(HERE, "out", "cluster", "plots", "phase_diagram.png"))
     a = ap.parse_args(argv)
     from scipy.interpolate import UnivariateSpline
@@ -129,6 +133,10 @@ def main(argv):
         print(f"{p:5.2f}  {r['fam']:8s} {r['it']:3d}  {r['g']:+.3f}   ({r['corr']:+.3f})          {r['drift']:+.4f}{tag}")
 
     fig, ax = plt.subplots(figsize=(8.2, 6.2), layout="constrained")
+    if not a.no_mean_field:
+        eps0 = np.geomspace(1e-4, 1.0, 600)
+        ax.plot(0.5 * np.log(eps0 / 2.0), eps0 * np.sqrt(2.0 / eps0 - 1.0), "-", color=C_MF,
+                lw=1.4, label="campo medio")
     if os.path.exists(a.fflo30):
         f30 = read_fflo30(a.fflo30, a.fflo30_all)
         ps = sorted(f30)
@@ -156,7 +164,8 @@ def main(argv):
     for r in keep:
         ax.annotate(f"it {r['it']}", (r["g"], r["p"]), textcoords="offset points",
                     xytext=(7, -3), fontsize=7, color=MUTED)
-    ax.set(xlabel="g_c  (= −4π·shift − ½ln2,  μ_avg = 1)", ylabel="P",
+    ymax = max([r["p"] for r in keep] + [0.7]) + 0.08
+    ax.set(xlabel="g_c", ylabel="P", ylim=(0, ymax), xlim=(-3.6, 0.5),
            title="Linea critica (Thouless) del gas di Fermi 2D polarizzato")
     ax.legend(fontsize=8, loc="upper left")
     if excl:
