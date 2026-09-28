@@ -91,8 +91,9 @@ print(last, paths[0], paths[1])")
   # P ~ 0.7 la cuspide FFLO a qff sparisce (il salto di n_dn a kF_dn crolla a ~0.1) e il
   # massimo passa a Q ~ 0: col pinning a qff quel canale resta supercritico, poli a
   # Omega < 0 = molecole occupate, C e n_dn scappano (test/diagnose_highP.py sulla
-  # scansione P: a P = 0.8 C = 2.9, n_dn +160%).  Fino a P = 0.65 global-max e qff danno
-  # lo stesso g_c entro 0.004.  Ricetta di PROD + global-max.  Due scalette in parallelo
+  # scansione P: a P = 0.8 C = 2.9, n_dn +160%).  Anche sotto il massimo non e' a qff ma a
+  # 1.03-1.1 qff (dg_c -0.05 a P = 0.1, -0.002 a 0.65).  Ricetta di PROD + global-max.
+  # Due scalette in parallelo
   # da P = 0.65 (HI_SRC, default out/P0p65_etaexact): 0.70 -> 0.80 -> 0.90 e
   # 0.75 -> 0.85.  Ogni gradino riparte dall'ultima iterazione del precedente con la
   # griglia k rifatta sui kF nuovi (test/reseed_regrid.py; il passaggio lo fa run.slurm)

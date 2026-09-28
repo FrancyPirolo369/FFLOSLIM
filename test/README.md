@@ -55,8 +55,9 @@ max(Q < 0.8 qff) − picco(qff): −7δ a P = 0.3, −0.5δ a 0.65, +0.3δ a 0.7
 +8.7δ a 0.9.  Col pinning a qff il canale Q ≈ 0 resta supercritico → poli a Ω < 0
 (molecole occupate) → C e n_dn scappano (P = 0.8: C = 2.9, n_dn +160%).  Non è
 l'integrazione: il peso vero dei poli a Ω < 0 supera quello catturato dalla griglia,
-integrare meglio peggiorerebbe.  Fino a P = 0.65 `global-max` e `qff` danno lo stesso
-g_c entro 0.004 (ripinnando le stesse tabelle).
+integrare meglio peggiorerebbe.  Anche a P ≤ 0.65 il massimo non è a qff ma a
+1.03–1.1 qff, sopra il nodo qff di +4.2δ a P = 0.1, +1.5δ a 0.3, +0.6δ a 0.5, +0.2δ a 0.65
+(ripinnando le stesse tabelle: Δg_c = −0.053, −0.018, −0.008, −0.002).
 
 `./submit.sh HI`: ricetta di PROD + `--thouless-q-mode global-max`, due scalette in
 parallelo da `out/P0p65_etaexact` (o `HI_SRC`): 0.70 → 0.80 → 0.90 e 0.75 → 0.85

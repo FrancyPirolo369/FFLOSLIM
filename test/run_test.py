@@ -145,10 +145,11 @@ CONFIG = [
 
     # --- physics modes -----------------------------------------------------
     ("thouless-q-mode", "qff",   "where the Thouless condition is imposed: qff or "
-                                 "global-max (max of ReGamma^-1(Q,0) over all Q).  Up to "
-                                 "P=0.65 they coincide (dg <= 0.004); from P~0.7 the "
-                                 "max moves to Q~0 and qff leaves it supercritical "
-                                 "(runaway at P>=0.8): use global-max there"),
+                                 "global-max (max of ReGamma^-1(Q,0) over all Q).  qff "
+                                 "is never the max: up to P=0.65 the max sits at "
+                                 "1.03-1.1 qff, +4 delta above it at P=0.1 (dg -0.05) "
+                                 "down to +0.2 at 0.65; from P~0.7 it moves to Q~0 "
+                                 "(runaway at P>=0.8).  global-max is the criterion"),
     ("eta-floor",    "broad",    "eta floor mode"),
     ("high-k-sigma", "stale",    "what to do beyond k_update_max: stale|pair-contact"),
     ("ring-mode",    "exact_window", "SIGMA_PN_RING_MODE; exact_window is the "
