@@ -2,12 +2,16 @@
 """Diagramma di fase: g_c in ascissa, P in ordinata, risultato nuovo contro FFLO30 (luglio).
 
 Per ogni P prende l'ultima iterazione della prima famiglia disponibile, nell'ordine di
---families (default prodg, gmax, prod: prima il massimo globale, poi PROD a qff).
+--families (default prod_union, prodg, gmax, prod, x75a0p3, x75a0p6: prima PROD_UNION, poi il massimo globale, poi PROD
+a qff, poi le prove ad alta P di submit_highP_x.sh ripartite dalla 0.75, alpha 0.3 prima).
 g_c = -4 pi shift - ln2/2, lo shift e' quello applicato da density (riga PAIR di loop.log).
 Per le famiglie pinnate a qff (prod, etaexact) --gmax-corr aggiunge la correzione al primo
 ordine per pinnare il massimo globale di ReGamma^-1(Q,0) (dall'ultima snapshot).
-Sul risultato nuovo una spline cubica di smoothing g(P) (--smooth = scarto tipico atteso
-per punto; 0 = interpolante).  --exclude toglie delle P (default 0.5: in overshoot).
+Ogni punto e' classificato dal Q del Thouless all'ultima iterazione (Q= della riga PAIR;
+per le pinnate a qff con la correzione, il Q del massimo globale): Q < --pbcs-qmax * qff
+e' pBCS, altrimenti FFLO.  Una spline di smoothing g(P) per ramo, di colore diverso
+(--smooth = scarto tipico atteso per punto; 0 = interpolante); forma del marker =
+ramo, colore = ramo (la famiglia sta nella tabella stampata).  --exclude toglie delle P.
 
 Campo medio (T = 0, soglia FFLO): P_c = eps0 sqrt(2/eps0 - 1) = sqrt(eps0 (2 - eps0)), con
 g = ln(eps0/2)/2 (la stessa relazione eps0 <-> g dei punti numerici), eps0 in (0, 1].
@@ -40,7 +44,7 @@ import matplotlib.pyplot as plt
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 INK, MUTED, GRID = "#1f1f1e", "#6b6b68", "#e4e3df"
 C_NEW, C_F30, C_SCAN, C_MF, C_NSCT = "#eb6834", "#2a78d6", "#6b6b68", "#1baf7a", "#e87ba4"
-MARK = {"prodg": "D", "gmax": "^", "prod": "s", "etaexact": "o"}
+C_PBCS = "#7b4fc4"
 plt.rcParams.update({
     "figure.facecolor": "#fcfcfb", "axes.facecolor": "#fcfcfb", "axes.edgecolor": MUTED,
     "axes.labelcolor": INK, "xtick.color": MUTED, "ytick.color": MUTED, "axes.grid": True,
@@ -54,32 +58,44 @@ def g_of(shift):
 
 
 def last_shift(loop_log):
-    """(iterazione, g_c) dell'ultima riga PAIR, e la deriva di g_c per iterazione sulle ultime 3."""
-    its, gs = [], []
+    """(iterazione, g_c, deriva di g_c per iterazione sulle ultime 3, Q/qff selezionato).
+
+    Il Q selezionato e' quello della riga PAIR (Q=...); le run pinnate a qff con il
+    motore vecchio non lo scrivono e restituiscono None."""
+    its, gs, qs, qff = [], [], [], None
     for line in open(loop_log):
-        m = re.search(r"iter (\d+) PAIR: .*shift=([+-][\d.eE+-]+)", line)
+        m = re.search(r"qff=([\d.]+)", line)
+        if m and qff is None:
+            qff = float(m[1])
+        m = re.search(r"iter (\d+) PAIR: .*shift=([+-][\d.eE+-]+)(?:.*Q=([\d.]+))?", line)
         if m:
             its.append(int(m[1]))
             gs.append(g_of(float(m[2])))
+            qs.append(float(m[3]) if m[3] else None)
     if not its:
         return None
     n = len(gs)
     drift = (gs[-1] - gs[max(0, n - 3)]) / max(min(2, n - 1), 1) if n > 1 else np.nan
-    return its[-1], gs[-1], drift
+    qrel = qs[-1] / qff if (qs[-1] is not None and qff) else None
+    return its[-1], gs[-1], drift, qrel
 
 
 def gmax_correction(run_dir):
+    """Correzione di g_c al massimo globale di ReGamma^-1(Q,0) e Q/qff di quel massimo."""
     snaps = sorted(glob.glob(os.path.join(run_dir, "snap", "iter*.npz")))
     if not snaps:
-        return 0.0
+        return 0.0, None
     z = np.load(snaps[-1])
     q, w = np.asarray(z["q"]), np.asarray(z["omega"])
     re0 = np.asarray(z["ReInvGamma"], float)[:, int(np.argmin(np.abs(w)))]
-    iq = int(np.argmin(np.abs(q - float(z["qff"]))))
-    return float(-4.0 * np.pi * (np.nanmax(re0) - re0[iq]))
+    qff = float(z["qff"])
+    iq = int(np.argmin(np.abs(q - qff)))
+    imax = int(np.nanargmax(re0))
+    return float(-4.0 * np.pi * (re0[imax] - re0[iq])), float(q[imax] / qff)
 
 
-def collect(base, families, gmax_corr, min_iters):
+def collect(base, families, gmax_corr, min_iters, pbcs_qmax=0.1):
+    """Ultima iterazione per P; phase = pBCS se il Q del Thouless e' < pbcs_qmax * qff."""
     pts = {}
     for fam in families:
         for d in sorted(glob.glob(os.path.join(base, f"P0p*_{fam}"))):
@@ -90,8 +106,15 @@ def collect(base, families, gmax_corr, min_iters):
             r = last_shift(os.path.join(d, "loop.log"))
             if r is None or r[0] < min_iters:
                 continue
-            corr = gmax_correction(d) if (gmax_corr and fam in ("prod", "etaexact")) else 0.0
-            pts[p] = dict(p=p, fam=fam, it=r[0], g=r[1] + corr, drift=r[2], corr=corr)
+            corr, qrel = 0.0, r[3]
+            if gmax_corr and fam in ("prod", "etaexact"):
+                # pinnate a qff: g e Q diventano quelli del massimo globale
+                corr, qrel = gmax_correction(d)
+            if qrel is None:
+                qrel = 1.0                      # pinnata a qff senza correzione
+            phase = "pBCS" if qrel < pbcs_qmax else "FFLO"
+            pts[p] = dict(p=p, fam=fam, it=r[0], g=r[1] + corr, drift=r[2], corr=corr,
+                          qrel=qrel, phase=phase)
     return pts
 
 
@@ -112,12 +135,14 @@ def main(argv):
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--base", default=os.path.join(HERE, "out", "cluster"))
-    ap.add_argument("--families", default="prodg,gmax,prod")
+    ap.add_argument("--families", default="prod_union_fine,prod_union,prodg,gmax,prod,x75a0p3,x75a0p6")
     ap.add_argument("--min-iters", type=int, default=1)
     ap.add_argument("--no-gmax-corr", action="store_true")
-    ap.add_argument("--exclude", default="0.5", help="P da togliere, separate da virgole ('' = nessuna)")
+    ap.add_argument("--exclude", default="", help="P da togliere, separate da virgole ('' = nessuna)")
     ap.add_argument("--smooth", type=float, default=0.03,
                     help="scarto tipico per punto della spline in g_c (0 = interpolante)")
+    ap.add_argument("--pbcs-qmax", type=float, default=0.1,
+                    help="Q del Thouless sotto questa frazione di qff = pBCS (Q = 0), sopra = FFLO")
     ap.add_argument("--scan", action="store_true", help="aggiunge la scansione SLIM (etaexact, it 30)")
     ap.add_argument("--fflo30", default=os.path.join(os.path.dirname(HERE), "r30b_pull",
                                                      "critical_line_status.txt"))
@@ -131,19 +156,21 @@ def main(argv):
     from scipy.interpolate import UnivariateSpline
 
     excl = {round(float(x), 4) for x in a.exclude.split(",") if x.strip()}
-    pts = collect(a.base, [f.strip() for f in a.families.split(",")], not a.no_gmax_corr, a.min_iters)
+    pts = collect(a.base, [f.strip() for f in a.families.split(",")], not a.no_gmax_corr,
+                  a.min_iters, a.pbcs_qmax)
     keep = [pts[p] for p in sorted(pts) if round(p, 4) not in excl]
-    print(f"{'P':>5s}  famiglia  it   g_c     (corr. max globale)  deriva/it")
+    print(f"{'P':>5s}  famiglia  it   g_c     (corr. max globale)  deriva/it  Q/qff  ramo")
     for p in sorted(pts):
         r = pts[p]
         tag = "  ESCLUSO" if round(p, 4) in excl else ""
-        print(f"{p:5.2f}  {r['fam']:8s} {r['it']:3d}  {r['g']:+.3f}   ({r['corr']:+.3f})          {r['drift']:+.4f}{tag}")
+        print(f"{p:5.2f}  {r['fam']:8s} {r['it']:3d}  {r['g']:+.3f}   ({r['corr']:+.3f})          "
+              f"{r['drift']:+.4f}    {r['qrel']:5.3f}  {r['phase']}{tag}")
 
     fig, ax = plt.subplots(figsize=(8.2, 6.2), layout="constrained")
     if not a.no_mean_field:
         eps0 = np.geomspace(1e-4, 1.0, 600)
         ax.plot(0.5 * np.log(eps0 / 2.0), eps0 * np.sqrt(2.0 / eps0 - 1.0), "-", color=C_MF,
-                lw=1.4, label="campo medio")
+                lw=1.4, label="mean-field/psct")
     if a.nsct and os.path.exists(a.nsct):
         d = np.loadtxt(a.nsct)
         d = d[np.argsort(d[:, 2])]
@@ -154,33 +181,40 @@ def main(argv):
         f30 = read_fflo30(a.fflo30, a.fflo30_all)
         ps = sorted(f30)
         ax.plot([f30[p] for p in ps], ps, "o--", color=C_F30, ms=4.5, lw=1.2,
-                label="FFLO30, luglio (r30 + r30b, 9-12 it)")
+                label="luglio")
     if a.scan:
         sc = collect(a.base, ["etaexact"], False, 1)
         ps = [p for p in sorted(sc) if p <= 0.7]
         ax.plot([sc[p]["g"] for p in ps], ps, "o:", color=C_SCAN, ms=4, lw=1.0,
-                label="scansione SLIM (qff, it 30)")
-    if len(keep) >= 4:
-        P = np.array([r["p"] for r in keep]); G = np.array([r["g"] for r in keep])
-        s = len(P) * a.smooth ** 2
-        spl = UnivariateSpline(P, G, k=3, s=s)
+                label="slim scan (start of last week)")
+    # una spline per ramo, scelto dal Q del Thouless: FFLO (Q != 0) e pBCS (Q = 0)
+    col_of = {"FFLO": C_NEW, "pBCS": C_PBCS}
+    for name, lab in (("FFLO", "spline FFLO (Q ≠ 0)"), ("pBCS", "spline pBCS (Q = 0)")):
+        rr = [r for r in keep if r["phase"] == name]
+        if len(rr) < 2:
+            continue
+        P = np.array([r["p"] for r in rr]); G = np.array([r["g"] for r in rr])
+        k = min(3, len(P) - 1)                                    # 2 punti = retta, 3 = parabola
+        spl = UnivariateSpline(P, G, k=k, s=len(P) * a.smooth ** 2)
         pf = np.linspace(P.min(), P.max(), 300)
-        ax.plot(spl(pf), pf, "-", color=C_NEW, lw=2.2, label=f"spline sul risultato nuovo (±{a.smooth:g})")
+        ax.plot(spl(pf), pf, "-", color=col_of[name], lw=2.2, label=lab)
         res = G - spl(P)
-        print("scarti dalla spline: " + "  ".join(f"{p:.2f}:{x:+.3f}" for p, x in zip(P, res)))
-    for fam in dict.fromkeys(r["fam"] for r in keep):
-        rr = [r for r in keep if r["fam"] == fam]
-        lab = {"prodg": "PROD al massimo globale", "gmax": "HI (massimo globale)",
-               "prod": "PROD (qff)" + ("" if a.no_gmax_corr else " + correz. max globale")}[fam]
-        ax.plot([r["g"] for r in rr], [r["p"] for r in rr], MARK.get(fam, "o"), color=C_NEW,
-                ms=7, mec="#fcfcfb", mew=1.2, label=lab)
+        print(f"scarti dalla spline {name}: " + "  ".join(f"{p:.2f}:{x:+.3f}" for p, x in zip(P, res)))
+    # stesso marker e colore per tutto il ramo, qualunque sia la famiglia della run
+    mark_of = {"FFLO": "s", "pBCS": "^"}
+    for phase, lab in (("FFLO", "FFLO (Q ≠ 0)"), ("pBCS", "pBCS (Q = 0)")):
+        rr = [r for r in keep if r["phase"] == phase]
+        if rr:
+            ax.plot([r["g"] for r in rr], [r["p"] for r in rr], mark_of[phase],
+                    color=col_of[phase], ms=7, mec="#fcfcfb", mew=1.2, label=lab)
     for r in keep:
         ax.annotate(f"it {r['it']}", (r["g"], r["p"]), textcoords="offset points",
                     xytext=(7, -3), fontsize=7, color=MUTED)
     ymax = max([r["p"] for r in keep] + [0.7]) + 0.08
     x0, x1 = (float(v) for v in a.xlim.split(","))
-    ax.set(xlabel="g_c", ylabel="P", ylim=(0, ymax), xlim=(x0, x1),
-           title="Linea critica (Thouless) del gas di Fermi 2D polarizzato")
+    ax.set(xlabel="g_c", ylabel="P", ylim=(0, ymax), xlim=(x0, x1),)
+    ax.set_ylim(0, 1)
+    ax.set_xlim(x0, 5)
     ax.legend(fontsize=8, loc="upper left")
     if excl:
         ax.text(0.99, 0.01, "esclusi: P = " + ", ".join(f"{x:g}" for x in sorted(excl)),
