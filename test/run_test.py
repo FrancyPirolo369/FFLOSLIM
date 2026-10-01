@@ -119,6 +119,14 @@ CONFIG = [
                                  "cost is sigma_nk * sigma_nomega per spin"),
     ("n-theta",      32,         "angular nodes in the density stage"),
     ("profile",      "turbo",    "pairbuild quadrature preset: turbo|quick|gold"),
+    ("impi-eps-union", 0.0,      "PROD_UNION: half-width of the eps-lattice core copied "
+                                 "onto eps = Omega in the ImPi integral (pairbuild "
+                                 "--eps-union-core); 0 = off.  0.12 removes the sawtooth "
+                                 "at the eps nodes (validated locally 2026-09-29)"),
+    ("lattice-dw",   1.0e-3,     "pairbuild fine spacing of the Omega/eps lattices (the "
+                                 "linear block keeps its width).  2.5e-4 resolves the "
+                                 "minority QP at kF at high P (FWHM 2 Z eta ~ 2e-4) and "
+                                 "removes the spurious Q rows near qff (2026-09-29)"),
     ("lattice-n-tail", 0,         "pairbuild lattice tail nodes; 0 keeps the profile "
                                  "default (turbo 20, quick 45, gold 70)"),
     ("omega-feature-half-width", -1.0,
@@ -145,7 +153,7 @@ CONFIG = [
 
     # --- physics modes -----------------------------------------------------
     ("thouless-q-mode", "qff",   "where the Thouless condition is imposed: qff or "
-                                 "global-max (max of ReGamma^-1(Q,0) over all Q).  qff "
+                                 "global-max (max of ReGamma^-1(Q,0) over Q <= 2 qff).  qff "
                                  "is never the max: up to P=0.65 the max sits at "
                                  "1.03-1.1 qff, +4 delta above it at P=0.1 (dg -0.05) "
                                  "down to +0.2 at 0.65; from P~0.7 it moves to Q~0 "
@@ -423,7 +431,10 @@ def main(argv=None):
         log(f"=== iter {i} START PAIRBUILD: profile={cfg['profile']} "
             f"Lambda={cfg['bubble_lambda']:g} p_nodes={cfg['p_nodes'] or 'profile'} "
             f"omega_feature={cfg['omega_mode']} width={feature_half_width:g} "
-            f"nodes={feature_nodes} max_q_points={cfg['omega_feature_q_max_points']} ===")
+            f"nodes={feature_nodes} max_q_points={cfg['omega_feature_q_max_points']}"
+            + (f" PROD_UNION eps_union={cfg['impi_eps_union']:g}" if cfg["impi_eps_union"] > 0 else "")
+            + (f" lattice_dw={cfg['lattice_dw']:g}" if abs(cfg["lattice_dw"] - 1.0e-3) > 1e-12 else "")
+            + " ===")
         cmd = [sys.executable, "-m", "fflo.pairbuild",
                "--up", up, "--down", down, "--out-dir", pb,
                "--workers", str(cfg["workers"]), "--profile", cfg["profile"],
@@ -434,6 +445,10 @@ def main(argv=None):
                "--omega-feature-nodes", str(feature_nodes)]
         if cfg["lattice_n_tail"] > 0:
             cmd += ["--lattice-n-tail", str(cfg["lattice_n_tail"])]
+        if cfg["impi_eps_union"] > 0:
+            cmd += ["--eps-union-core", f"{cfg['impi_eps_union']:.15g}"]
+        if abs(cfg["lattice_dw"] - 1.0e-3) > 1e-12:
+            cmd += ["--lattice-dw", f"{cfg['lattice_dw']:.15g}"]
         if cfg["omega_feature_q_min"] >= 0.0:
             cmd += ["--omega-feature-q-min", f"{cfg['omega_feature_q_min']:.15g}"]
         if cfg["omega_feature_q_max"] >= 0.0:
