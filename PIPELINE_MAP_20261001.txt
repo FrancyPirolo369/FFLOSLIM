@@ -1,0 +1,550 @@
+FFLO — mappa di un ciclo, dal comando ai cubi nuovi        versione 2026-10-01
+==============================================================================
+
+Riferimenti file:riga dell'albero di lavoro di X_FFLO_SLIM/ al 2026-10-01; le
+modifiche sono state copiate sul cluster in cluster_bundle_20260922/ (Nota 3).
+★ = cambiato o nuovo rispetto alla mappa del 23/09.
+
+  ξ_kσ = k²/m − μ_σ        G = 1/(ω − ξ − (ReΣ − σ₀) − i·ImΣ + iη)
+  A = −(1/π) Im G          n_σ = ∫ k·n(k) dk   (peso lineare, no 2π)
+★ esempio P = 0.50  (seed liberi a μ medio 1:  μ_σ = 1 ± P)
+  μ_up=1.5  μ_dn=0.5  m=1  ⇒  kF_up=1.224745  kF_dn=0.707107  qff=0.517638
+  target: n_σ = μ_σ/2          accoppiamento critico: g_c = −4π·shift − ½ ln 2
+
+★ IN BREVE, cosa è cambiato dal 23/09
+  · sul cluster il driver è test/run_test.py (copia di run_fflo.py con le
+    manopole nuove), lanciato da test/run.slurm, che si risottomette da solo
+  · Σ calcolata fino a k = 8 con pintmax 12; oltre k = 8 Σ analitica di
+    contatto e coda C/k⁴ in n(k)  (prima: Σ congelata al seed oltre k = 14)
+  · tabella di coppia con nodi ω anche sulle soglie (zero_and_thresholds):
+    con il vecchio 'zero' lo stato legato a due corpi non era risolto
+  · pin con floor η exact_zero; Σ su 97 nodi ω invece di 41
+  · Λ della bolla è una manopola (era un 4 scritto a mano); unione in ε e
+    passo del reticolo sono opzioni della bolla
+  · seed costruiti per ogni P (make_free_seed.py), griglia k sui kF giusti
+  · i cubi grossi vengono potati: ogni iterazione resta in out/<TAG>/snap/
+  · fisica: in 2D il massimo di ReΓ⁻¹(Q,0) sta ESATTAMENTE a qff; global-max
+    ritirato; nuovo diagnostico D (fine stadio 1)
+
+
+╔═══ LIVELLO 0 · tu ═════════════════════════════════════════════════════════╗
+
+   la ricetta PROD (test/submit.sh:79-89), base di tutto il diagramma:
+     --pintmax 12 --k-update-max 8 --eta-floor exact_zero
+     --lattice-n-tail 100 --sigma-nomega 97
+     --high-k-sigma pair-contact --contact-tail --prune-keep 2
+     + i default di CONFIG: alpha 0.3, delta 1e-3, profile turbo, Λ = 4,
+       thouless-q-mode qff, sigma-nk 24, n-theta 32
+   varianti in prova:
+     R8_qff     = PROD + --sigma-nomega 193 --p-nodes 124 --coherent-nk 384
+                  (test/submit_ablation.sh:95; nell'ablazione alpha = 1)
+     prod_union = PROD + --impi-eps-union 0.12  [--lattice-dw 2.5e-4]
+                  (test/submit_prod_union.sh; QMODE=qff per il pin a qff)
+
+ ★ cd test && ./submit.sh PROD           python3 test/run_test.py --out out/x
+   (cluster)                             (portatile)
+        │                                      │
+        │  test/submit.sh:79-89                │  test/run_test.py:49
+        │  sbatch --export=ALL,TAG,TARGET,ARGS │  CONFIG = [ 46 manopole ] ★
+        │  ARGS = solo ciò che cambia; tutto   │  --help le elenca tutte
+        │  il resto è il default di CONFIG     │  <out>/config.json scritto
+        │                                      │  PRIMA di calcolare
+        ▼                                      │
+╔═══ LIVELLO 1 · scheduling (solo cluster) ════╪═════════════════════════════╗
+                                               │
+   test/run.slurm                              │
+     28 cpu · 120 GB · 4h · account=teorica    │
+     constraint=matrix                         │
+     module load python/3.14.3                 │
+     source ~/venvs/fflo-sc/bin/activate       │
+     OMP_NUM_THREADS=1  ← il parallelismo      │  run_test.py:369-371
+                          è a PROCESSI         │  env.setdefault(v, "1")
+     run_test.py --workers 28                  │
+                 --time-budget 215 $ARGS  :35  │
+ ★   a fine job, se iterazioni < TARGET, si    │
+     risottomette da solo        run.slurm:40  │
+     (AUTOCHAIN=0 lo spegne)                   │
+ ★   LADDER (solo HI): passa al P successivo   │
+     con la griglia k rifatta    run.slurm:52  │
+        │                                      │
+        └──────────────────┬───────────────────┘
+                           ▼
+╔═══ LIVELLO 2 · ripresa e budget ═══════════════════════════════════════════╗
+
+   last_complete_iteration(out/$TAG)                    run_test.py:222
+        │  tiene la iterNNN più alta con ENTRAMBI i cubi
+        │  (una iterazione monca viene scartata → ripartenza sicura)
+        ▼
+   LAST ──► UP, DN    oppure il seed --up/--down        run_test.py:301-313
+        │  ★ seed = seeds_warm/<TAG>/A_komega_spin*_reseed.npz: copia
+        │    dell'ultima iterazione di un'altra run allo stesso P, oppure
+        │    reseed_mu.py / reseed_regrid.py; all'origine seeds_free/
+        │    (make_free_seed.py, fermioni liberi)
+        ▼
+   np.load(UP)  ──►  mu_up=1.5   mu_dn=0.5   k_max=25.1326         :324-331
+        ├──► qff = √mu_up − √mu_dn = 0.5176380902
+        ├──► q_table_max = min(q_cap=20, k_max − Λ − 0.1) = 20.0          :334
+        │      ★ Λ = --bubble-lambda (default 4): prima era il 4 letterale
+        │        di pairbuild; ora è una manopola ed entra anche in g₀
+        └──► k_update_max = 8   ★ esplicito (--k-update-max)              :335
+               coincide con q_table_max − pintmax = 20 − 12
+               serve pintmax ≥ k_update_max + 3, se no il canale di coda di
+               Σ è tagliato a k ~ pintmax + 1.5: run_test avvisa          :337
+        │
+        │    la vecchia coperta corta (14, regime divergente) non c'è più:
+        │    oltre k = 8 non resta il seed ma la Σ di contatto (stadio 2.5)
+        ▼
+   N = min(iters, TARGET − LAST)                                     :317-319
+ ★ un'iterazione NON parte se  minuti usati + 1.15·ultima > 215      :398-403
+
+
+╔═══ LIVELLO 3 · IL CICLO ═════════════════════════════  per i in 1..N  ═════╗
+
+   griglia q:  smooth_multicenter_grid(0, 2.2, core_n=40, centri=[0, qff])
+             + smooth_multicenter_grid(2.2, 20.0, tail_n)
+             └─► 76 nodi q, addensati su 0 e su qff
+                                      run_test.py:414-418 → :207
+                          │           nodi dove serve, invertendo la
+                          │           cumulativa di ρ(q) = base + Σ sech²
+                          ▼
+┌─── STADIO 1 · pairbuild ───────────────────────────────────────────────────┐
+│  fflo/pairbuild.py                                                         │
+│  lanciato da run_test.py:438-474     python -m fflo.pairbuild              │
+│                                                                            │
+│   1. qp_model_from_cube(up) / (down)       ← modello quasiparticella       │
+│      build_qp_cube(...) ──► control/A0_up.npz, A0_down.npz                 │
+│                   │        pairbuild.py:199-204 → qp_cube.py:81            │
+│                   │                             → qp_dyson.py:31           │
+│                   │   f = w − xi − (re − sigma0) = 0      polo di Dyson    │
+│                   │   z = min(1/(1 − dReΣ/dω), 1)   clip regola di somma   │
+│                   │   g = z·(|ImΣ| + η)             la LARGHEZZA Γ_k       │
+│                   │   ⇒ il modello QP sono TRE ARRAY: E[k], Z[k], Γ[k]     │
+│                   │ ★ a kF, P=0.50: |ImΣ(kF,0)| ≈ 2.3e-3 ↑, 3.2e-3 ↓       │
+│                   │   contro η = 1e-3: la larghezza la decide il           │
+│                   │   pavimento di ImΣ, cioè i nodi ω di Σ (stadio 2.5)    │
+│                   ▼                                                        │
+│   2. subprocess  python -m fflo.impi_table        pairbuild.py:315-374     │
+│        residuo  A↑·A↓ − A0↑·A0↓  su griglia                                │
+│          Ω, ε : reticolo commensurato, passo 1e-3      (Nota 4)            │
+│          p    : 31 nodi LINEARI su [0, Λ], trapezio, nessun nodo a kF      │
+│          φ    : phipanel, 10 nodi + 7 a kF ± 0.05                          │
+│      ★ --eps-union-core 0.12 (PROD_UNION): per ogni Ω il nucleo del        │
+│        reticolo in ε è copiato su ε = Ω       impi_table.py:119-191        │
+│      ★ --lattice-dw: passo fine dei reticoli  pairbuild.py:252-259         │
+│        ──► impi/impi_residual_grid.npz                                     │
+│                   │                                                        │
+│                   ▼                                                        │
+│   3. ProcessPoolExecutor(_cv_init/_cv_work)      pairbuild.py:380-414      │
+│        _canonical_qp_fields(up, model_up)     ← gli E,Z,Γ del punto 1      │
+│        parte coerente QP×QP ANALITICA in energia (lorentziane);            │
+│        sulla griglia resta solo il residuo del punto 2                     │
+│        angle_mode="kjac": nk=96 (lineare + 240 nodi a kF ± 0.25),          │
+│        n_kquad=48 Chebyshev in u = cos φ  (= punto medio in φ, Δφ=0.065)   │
+│        gamma_floor=1e-3 scritto a mano (non è una manopola)                │
+│        ──► impi/impi_table.npz:  ImPi = ImPiGridResidual + ImPiQPQP        │
+│                   │                                                        │
+│                   ▼                                                        │
+│   4. subprocess  python -m fflo.pair_gamma        pairbuild.py:423-439     │
+│        Kramers-Kronig ImΠ ──► ReΠ, poi Γ⁻¹ con g₀⁻¹ di vuoto (Nota 2c)     │
+│        taper qkin_cosine fino a 20, guardia di segno su ImΓ⁻¹, η = 0.002   │
+│      ★ se --truncation-fix, --taper-* o --im-sign-guard non sono i         │
+│        default, pairbuild si ferma al punto 3 e run_test chiama da sé      │
+│        test/fix_truncation.py + pair_gamma        run_test.py:466-513      │
+│        ──► pair/pair_gamma_table.npz                                       │
+│              chiavi: q, omega, ReInvGamma, ImInvGamma                      │
+└──────────────────────────────┬─────────────────────────────────────────────┘
+                               │
+            log: ReInvGamma(ω≈0) a Q=0 e a Q=qff         run_test.py:520
+          ★ status.sh, colonna Q0-qff = ReΓ⁻¹(0,0) − ReΓ⁻¹(qff,0) in δ:
+            la gara fra il canale Q≈0 e quello FFLO (> 0 vince Q≈0)
+          ★ D = ReΓ⁻¹(Q*,0) − ReΓ⁻¹(qff,0) in δ, con Q* = argmax su Q ≤ 2 qff
+            (test/ablation_report.py).  Bersaglio esatto: D = 0, Q* = qff.
+            PROD a P=0.50: D 0.88, Q* = 1.025 qff.  La leva è la griglia p
+            del punto 2 (124 nodi: D 0.31, Q* = 1.007 qff); gli angoli del
+            punto 3 non contano.  APERTO: g_c non converge in modo monotono
+            nei nodi p (31: −0.437, 62: −0.48, 124: ~−0.40).
+                               ▼
+┌─── STADIO 2 · density ─────────────────────────────────────────────────────┐
+│  fflo/density.py · main() @1218                                            │
+│  lanciato da run_test.py:527-551     python -m fflo.density                │
+│                                                                            │
+│   1. load_seed(up), load_seed(down)      ← k, w, A, ReS, ImS, σ₀           │
+│                   │                        density.py:1361 (def :76)       │
+│                   ▼                                                        │
+│   2. il pin di Thouless                         density.py:1395-1426       │
+│        Q_pin, --thouless-q-mode:                                           │
+│          qff         → la riga q più vicina a qff          (PROD)          │
+│        ★ global-max  → massimo su Q ≤ 2 qff  (:1399-1405).  RITIRATO       │
+│                        in 2D: inseguiva il massimo numerico oltre qff      │
+│        apply_shift_to_pair_table(...)       → pair_shifted.py:92           │
+│          shift = ReΓ⁻¹(Q_pin, 0) + δ        δ = 1e-3 (--delta)             │
+│          re_shifted = re_inv − shift  (una costante su TUTTA la tabella)   │
+│          congelabile: --pair-shift-fixed / --pair-shift-freeze             │
+│      ★ --eta-floor exact_zero                 pair_shifted.py:165-172      │
+│          toglie solo il punto di misura nulla |Γ⁻¹| ≤ 1e-14; 'broad'       │
+│          rimpiazzava ImΓ⁻¹ in tutte le celle con |Re|,|Im| < η e faceva    │
+│          l'eccesso di densità fresco                                       │
+│        ──► proxy_pair_pinned.npz con pair_shift, pair_q_selected  :1445    │
+│                   │                                                        │
+│                   ▼                                                        │
+│   3. pair_contact_from_shifted_table(...)      density.py:1455 (def :200)  │
+│        Δ∞² = −∫q[∫_{Ω≤0} A_pair dΩ]dq/(2π) ;  C = Δ∞²/4                    │
+│        ──► pair_contact      ← IL diagnostico di convergenza               │
+│                   │                                                        │
+│                   ▼                                                        │
+│   4. finestra di update:  k ≤ k_update_max = 8,  ω ∈ [−216, 144]           │
+│                                                 density.py:1487-1500       │
+│                   │                                                        │
+│                   ▼                                                        │
+│   5. memory_safe_im_sigma(...)   ProcessPool    density.py:1532            │
+│        └─► _im_sigma_row_pair_native            sigma_engine.py:342        │
+│            ImΣ(k,w) = −π/(2π)² ∫Q dQ dθ dΩ A_pair(Q,Ω) A_f(|Q−k|,Ω−w) K    │
+│            K = +1 su Ω∈(0,w),  −1 su (w,0)           (kernel T=0)          │
+│            taglio angolare esatto a |p| ≤ pintmax = 12                     │
+│      ★ costo = sigma_nk × sigma_nomega = 24 × 97 = 2328 per spin           │
+│          i 97 ω sono indici equispaziati di w_base nella finestra          │
+│          (density.py:1519-1525): passo ~7e-3 attorno a 0                   │
+│          (41 nodi: 1.6e-2;  193 nodi: 3.5e-3)                              │
+│      ★ oltre k = 8  (--high-k-sigma pair-contact)  density.py:1565-1571    │
+│          ImΣ = −Δ∞² η_c / (x² + η_c²),   x = ω + k²/m − μ_interno          │
+│          cioè Σ = Δ∞²/(ω + ξ_int): due poli, n(k) = C/k⁴ esatto            │
+│          (con 'stale' la coda resta quella del seed e crolla)              │
+│                   │                                                        │
+│                   ▼                                                        │
+│   6. Kramers-Kronig:  ImΣ ──► ReΣ               density.py:1826-1829       │
+│        kk_re_pv_linear riga per riga, PV analitico  kramers_kronig:656     │
+│          seg = m(x1−x0) + (mw+c)·log|(x1−w)/(x0−w)| ; PV=0 sul polo        │
+│      ★ correzione: kk_sigma_gamma_asymptote NON è attivo (SIGMA_KK_MODE    │
+│        = legacy, density.py:1612).  La coda 1/ln² mancante è quasi         │
+│        costante in k e la assorbe σ₀: effetto < 0.5%                       │
+│                   │                                                        │
+│                   ▼                                                        │
+│   7. σ₀ = ReΣ(kF, 0)   e la si sottrae          sigma_engine.py:808-811    │
+│        k_fermi  = sqrt(mass * mu_sigma)                                    │
+│        sigma0   = np.interp(0.0, w, re_at_kF)   ← esatta, non mediata      │
+│        └─► pinza kF = √(m μ)  ≡  spostare μ                                │
+│            (è ciò che rende sensato "n vs μ/2")                            │
+│                   │                                                        │
+│                   ▼                                                        │
+│   8. mixing:  Σ = α·Σ_fresh + (1−α)·Σ_seed      density.py:1854-1857       │
+│        α = 0.3 in PROD;  ★ α = 1 nell'ablazione (risposta a un passo)      │
+│                   │                                                        │
+│                   ▼                                                        │
+│   9. pole_aware_rebuild(...)              density.py:1858 (def :1000)      │
+│        find_qp_poles_dyson            sigma_engine.py:971                  │
+│        rebuild_omega_per_k            sigma_engine.py:1124  (infittisce ω) │
+│        rebuild_a_from_mixed_sigma_1d  sigma_engine.py:718   (Dyson)        │
+│      ★ righe k > 8 ricostruite dalla Σ di contatto (due poli)              │
+│        ──► A(k,ω) nuova                                                    │
+│                   │                                                        │
+│                   ▼                                                        │
+│  10. n(k) = ∫_{−∞}^{0} A(k,ω) dω    occupied_nk    density.py:107          │
+│    ★ n = ∫₀⁸ k·n(k) dk + C/(2·8²)   density_with_contact_tail :149         │
+│      (--contact-tail, chiamata a :1889; prima: ∫ fino a k_max)             │
+│       ∫A dω ≟ 1                     row_sum_rule  density.py:122 ← sanity  │
+│                   │                                                        │
+│                   ▼                                                        │
+│  11. density_summary.txt + density_results.npz   density.py:2119, :2126    │
+│                   │                                                        │
+│                   ▼                                                        │
+│  12. np.savez(next_cubes/A_komega_spin{up,down}_iterNNN.npz)  :1991        │
+│       A, ReS, ImS, w, w_base, sigma0, mu_up, mu_dn, mass, eta, eps0,       │
+│       pair_contact, pair_delta_inf_squared, mix_alpha, iteration,          │
+│     ★ high_k_sigma_mode, high_k_contact_start, reseed_from                 │
+└──────────────────────────────┬─────────────────────────────────────────────┘
+                               │
+        log:  PAIR: contact=… shift=… Q=…    GAP: up=… down=…
+              TIME: … min    NK4dn: n(k)k⁴ del minoritario a k = 2…12
+                                                      run_test.py:562-584
+                               │
+      ★ PRUNE (--prune-keep 2): ogni iterazione finita è riassunta in
+        out/<TAG>/snap/iterNNN.npz  (n(k), tabella Γ⁻¹, contact, shift, Q)
+        out/<TAG>/snap/sigmaNNN.npz (13 righe k di Σ e A, ReΣ(k,0) su tutti
+        i k), poi i file grossi più vecchi delle ultime 2 sono cancellati
+        run_test.py:588-592 → :262 → test/extract_{snapshot,sigma}.py
+        ⚠ una DOS ricostruita dalla snap vede solo quelle 13 righe di Σ
+                               │
+                    up, down = i due cubi nuovi        run_test.py:587
+                               │
+                               └──────────►  iterazione i+1
+
+
+───────────────────────────────────────────────────────────────────────────
+NOTA 1 · INTEGRALI
+───────────────────────────────────────────────────────────────────────────
+
+  Σ — self-energia fermionica
+    fflo/sigma_engine.py:355        docstring con la formula completa
+        ImΣ(k,w) = −π/(2π)² ∫ Q dQ dθ dΩ  A_pair(Q,Ω) A_f(|Q−k|, Ω−w) K(w,Ω)
+        kernel T=0:  K = +1  su Ω∈(0,w)
+                     K = −1  su Ω∈(w,0)
+    fflo/sigma_engine.py:342-540    l'implementazione, incluso il taglio
+                                    angolare:
+                                    cos θ* = (q²+k²−p_int_max²)/(2qk)
+  ★ fflo/density.py:1565-1571       la Σ di contatto oltre k_update_max:
+        Σ(k,ω) = Δ∞² / (ω + k²/m − μ_interno + iη_c),   η_c = 1e-3
+    fflo/sigma_test.py:169          forma alternativa, scritta esplicitamente:
+        ImΣ^R(k,ω) = ∫ d²p/(2π)² ImΓ^R(|p+k|, ω+ξ̄(p))
+
+  Π — bolla di coppia (particella-particella), in due pezzi
+    fflo/impi_table.py:12           docstring: cosa viene salvato
+    fflo/kramers_kronig.py:387      compute_impi_raw_totals_for_slice: il
+                                    residuo su griglia, una fetta Ω alla volta
+                                    (p a trapezio, ε a pannelli sui gomiti)
+  ★ fflo/impi_table.py:119-191      variante PROD_UNION: nodi in ε estesi con
+                                    il nucleo del reticolo spostato su ε = Ω
+    fflo/analytic_bubble.py:70      nota: l'integrale SVANISCE a ω=0 (finestra
+                                    di larghezza nulla) ⇒ ImΠ(q,0)=0 esatto
+                                    per Pauli
+
+  Il nucleo analitico della bolla coerente
+    fflo/analytic_bubble.py:93      _equal_lorentzian_bubble_factor
+        π ∫₀^w L(ε; centro, γ)² dε
+        primitiva(u) = (1/2π)[ u/(u²+γ²) + arctan(u/γ)/γ ]
+    fflo/analytic_bubble.py:114     _stable_lorentzian_product_window_factor
+        π ∫₀^w L1(ε) L2(w−ε) dε
+        ^ mappa la lorentziana più stretta su t = atan((x−E)/Γ): il
+          jacobiano si cancella e resta un integrale liscio della più larga
+
+  La misura angolare
+    fflo/analytic_bubble.py:259     coherent_impi_kjac, docstring:
+        ∫₀^{2π} dφ F(|q−k|) = 2 ∫_{−1}^{1} du F(√(k²+q²−2kq u)) / √(1−u²)
+  ★     con n_kquad=48 nodi di Chebyshev è un punto medio uniforme in φ;
+        i nodi a kF del partner sono "accettati ma non applicati"
+        (fflo/adn_phi.py:528-533)
+    fflo/adn_phi.py:30
+        A_down_phi_int(ω,p,ε) = ∫₀^{2π} dφ A_down(…)
+
+★ QP×QP ESATTA nelle energie   (test/qpqp_ab_probe.py, NON nella pipeline)
+        d²k = dE↑ dE↓ / √R,   R = ((k↑+Q)² − k↓²)(k↓² − (k↑−Q)²)
+        lungo E↑ + E↓ = Ω  R è quadratico ⇒ arcoseno in forma chiusa;
+        il vuoto −1/8 torna.  Ma con le Γ vere anche 480 angoli invece di
+        48 cambiano D di ~0.02 soltanto: non è questa la leva (la leva è la
+        griglia p del residuo)
+
+  Kramers-Kronig
+    fflo/kramers_kronig.py:656      kk_re_pv_linear — PV esatto
+                                    sull'interpolante lineare a tratti:
+        seg = m(x1−x0) + (m·w+c)·log|(x1−w)/(x0−w)|
+        e PV = 0 sui due segmenti che contengono il polo
+    fflo/kramers_kronig.py:877      kk_sigma_gamma_asymptote — ★ spento
+
+  Il pin
+    fflo/pair_shifted.py:105-108    Γ_pin⁻¹ = Γ⁻¹(Q,Ω) − ReΓ⁻¹(Q_pin,0) − δ
+                                    ⇒ ReΓ_pin⁻¹(Q_pin,0) = −δ
+
+  Contact
+    fflo/density.py:200             pair_contact_from_shifted_table
+        Δ∞² = −(1/2π) ∫ q [ ∫_{Ω≤0} A_pair(q,Ω) dΩ ] dq
+        C   = Δ∞² / 4
+
+  Densità
+    fflo/density.py:107             n(k) = ∫_{−∞}^{0} A(k,ω) dω
+    fflo/density.py:122             regola di somma: ∫ A dω = 1
+    fflo/density.py:133             n = ∫ k·n(k) dk     (peso lineare, no 2π)
+  ★ fflo/density.py:149             density_with_contact_tail — ora ATTIVA:
+                                    n = ∫₀^{k_c} k·n dk + C/(2 k_c²), k_c = 8
+
+  Il polo di Dyson (non è un integrale ma è la condizione che definisce tutto)
+    fflo/qp_dyson.py:31             f(E_k) = ω − ξ_k − (ReΣ − σ₀) = 0
+                                    Z = 1/(1 − dReΣ/dω)   valutata in E_k
+                                    Γ = Z·(|ImΣ(E_k)| + η)
+
+
+───────────────────────────────────────────────────────────────────────────
+NOTA 2 · DOVE SONO g E ε₀  (e come si convertono)
+───────────────────────────────────────────────────────────────────────────
+
+ATTENZIONE: nel progetto convivono QUATTRO oggetti diversi che si chiamano
+"g".  Tenerli distinti è la prima cosa da chiarire se te lo chiedono.
+
+  (a) ε₀  — il parametro fisico dell'interazione, sta NEL CUBO
+      chiave `eps0` (alias `epsilon_0`) dentro A_komega_*.npz
+      letto in:  fflo/kramers_kronig.py:89    _scalar_from_npz(...)
+                 fflo/pair_gamma.py:367
+      Nei seed attuali vale 1.0.  Va letto dal CUBO, non dal nome della
+      cartella (vecchia storia di etichette EPS0 sbagliate).
+
+  (b) g  — l'accoppiamento adimensionale, DERIVATO da ε₀
+      fflo/proxy.py:189
+          self.g = 0.5 * np.log(self.epsilon_0 / 2)
+          g   = ½ ln(ε₀ / 2)          ε₀  = 2 · exp(2g)
+      ε₀ = 1.0  ⇒  g = ½ ln(0.5) = −0.346574
+      Convenzione sperimentale (Mitra PRL117, E_F della maggioranza):
+          g_maj = g_ours − ½ ln(1 + P)
+
+★ (b') g_c  — quello del diagramma di fase, letto dallo shift del pin
+      Spostare ReΓ⁻¹ di una costante equivale a cambiare ln ε₀ di 8π·shift:
+          g_c = ½ ln(ε₀'/2),   ln ε₀' = ln ε₀ − 8π·shift
+              = −4π·shift − ½ ln 2               (ε₀ = 1)
+      test/status_runs.py:29, test/plot_phase_diagram.py:7
+      P=0.50, PROD: shift ≈ +0.0070  ⇒  g_c = −0.434
+      Campo medio 2D sulla stessa figura:  P_c = ε₀ √(2/ε₀ − 1)
+      (la stessa formula di fflo/lorentzian_cube.py:43, resolve_mu)
+
+  (c) g₀  — l'accoppiamento NUDO, dipende dal cutoff UV
+      fflo/kramers_kronig.py:1027    g0_constant_from_cutoff(cutoff, eps0)
+          g₀ = −(1/8π) · ln( (cutoff² + ε₀) / ε₀ )
+      usato in fflo/pair_gamma.py:724, cutoff = p_int_max della tabella
+    ★ = Λ = --bubble-lambda:  con ε₀=1, Λ=4:  g₀ = −0.112730
+      e la T-matrice inversa di vuoto:
+      fflo/kramers_kronig.py:872     g0_inverse(omega, q, eps0,
+                                                mu_up, mu_dn, eta)
+          g₀⁻¹(q,ω) = −(1/8π) · ln( (q²/2 − μ↑ − μ↓ − ω − iη) / ε₀ )
+      a (q=qff, ω=0), P=0.50, ε₀=1, η=1e-3:  −0.024821 + 0.124979i
+      ^ il ln(…/ε₀) è dove ε₀ entra davvero nel calcolo.
+
+  (d) il "g" che NON è un accoppiamento: in fflo/qp_dyson.py la variabile
+      locale `g` è la LARGHEZZA Γ_k della quasiparticella.
+
+
+───────────────────────────────────────────────────────────────────────────
+NOTA 3 · FAR GIRARE UN CICLO
+───────────────────────────────────────────────────────────────────────────
+
+  Sul cluster (da test/, con module + venv caricati)
+    ./submit.sh PROD                     # P 0.10…0.65; POLS="0.30 0.50"
+    DRY=1 ./submit_ablation.sh           # stampa i comandi e basta
+    ONLY="R8_qff" ./submit_ablation.sh   # una variante, P=0.50 di default
+    CONTINUE=1 TARGET=6 ONLY="R5_pnodes4" ./submit_ablation.sh
+    QMODE=qff POLS="0.50" SRC_SUFFIX=prod ./submit_prod_union.sh
+    ./status.sh       # coda + contact, shift, Q, Q0-qff, gap, min, n(k)k⁴
+
+  Dal portatile
+    cd ~/Desktop/FFLO_pristinee/X_FFLO_SLIM
+    C=francesco.pirolo2@ophfe1:/home/PERSONALE/francesco.pirolo2/cluster_bundle_20260922
+    # tirare giù log e snap (pochi MB a run)
+    rsync -av --include='P0p*/' --include='P0p*/loop.log' \
+      --include='P0p*/snap/***' --exclude='*'  $C/out/ out/cluster/
+    python3 test/status_runs.py --base out/cluster
+    python3 test/ablation_report.py --P 0.50      # C, g, gap, D, Q*/qff
+    # mandare codice sul cluster: prima con -n (prova), poi senza
+    rsync -avRn fflo/density.py fflo/pairbuild.py test/run_test.py …  $C/
+
+  In locale
+    python3 test/run_test.py --dump-config --out out/prova <ARGS>
+    python3 test/run_test.py --out out/smoke --iters 1 --workers 10 \
+        --sigma-nk 12 --sigma-nomega 21 --n-theta 16 --core-n 20 --tail-n 10
+    tail -f out/prova/loop.log
+    Riprendere = stesso comando: riparte dall'ultima iterazione completa.
+
+  Tempi per iterazione (28 core)
+    PROD                       ~25 min
+    prod_union / union_fine    ~27 / ~35 min
+    R8 (p 124, Σ 193 ω)        70-128 min  (Σ costa 24 × 193 = 4632 per spin)
+  Misura sempre la prima dal "TIME:" nel log prima di decidere TARGET.
+
+  Note pratiche
+    · `--help` di test/run_test.py elenca tutte le manopole.
+    · out/<TAG>/config.json è la provenienza, non il comando che hai scritto.
+    · run_fflo.py esiste ancora ed è il driver "pulito", ma non ha le
+      manopole di questa settimana: per tutto ciò che è sul cluster usa
+      test/run_test.py.
+
+
+───────────────────────────────────────────────────────────────────────────
+NOTA 4 · DOVE E COME VENGONO FATTE LE GRIGLIE
+───────────────────────────────────────────────────────────────────────────
+
+    Alcune griglie il ciclo le COSTRUISCE a ogni iterazione,
+    altre le EREDITA dal cubo e non le tocca mai.
+
+
+A) COSTRUITE A RUNTIME
+──────────────────────
+
+  q  — tabella di coppia                      run_test.py:414-418 → :207
+       smooth_multicenter_grid: nodi distribuiti come
+           ρ(q) = base + Σ_i picco_i · sech²((q − c_i)/w_i)
+       invertendo la cumulativa di ρ.  Due blocchi:
+           core:  [0, 2.2]            centri {0, qff},  picchi {12, 15}
+           tail:  [2.2, q_table_max]  centro  {3.0},    picco  {6}
+       76 nodi in tutto; tail_n riscalato con la finestra (run_test.py:341).
+
+  Ω ed ε della bolla — reticolo commensurato   impi_table.py:2095, :2166
+       build_omega_lattice (lattice_grids.py:67): ogni nodo è un multiplo
+       intero di dw = 1e-3, blocco lineare attorno a 0 (turbo: 40 nodi per
+       lato, ±0.04), code int-sinh;  Ω fino a ±240, ε in [−24, 160]
+     ★ code: --lattice-n-tail 100 in PROD (turbo 20)
+     ★ --lattice-dw 2.5e-4: blocco lineare riscalato a pari larghezza
+     ★ --eps-union-core: per ogni Ω il nucleo |ε| ≤ 0.12 copiato su ε = Ω
+       ⚠ correzione: la mappa del 23/09 diceva che il reticolo non era sulla
+         strada viva.  Lo è già dal 23/09 per Ω ed ε della bolla (pairbuild
+         chiede --omega-grid-mode lattice e --eps-grid-mode lattice).
+         Mancano solo k e q commensurati.
+     ★ in più le finestre di feature in Ω (--omega-mode zero_and_thresholds,
+       21 nodi, larghezza |μ↑−μ↓| + 0.05; prima 'zero': nessun nodo sullo
+       stato legato a due corpi, ReΓ⁻¹(qff,0) sbagliato del 34%, contact
+       +33%).  Questi nodi NON stanno sul reticolo.
+
+  p — momento interno del residuo       pairbuild.py:220, impi_table.py:1041
+       lineare, 31 nodi su [0, Λ] (turbo), trapezio semplice, nessun nodo
+       sui gusci kF (p_feature 0 in turbo; gold ne mette 7 a ± 0.05)
+     ★ --p-nodes 62 / 124: D scende (0.88 → 0.5 → 0.3) ma g_c no
+       (−0.437, −0.48, ~−0.40): l'errore oscilla, probabilmente per dove
+       cadono i gusci kF rispetto ai nodi.  Da decidere.
+
+  k e angolo della bolla coerente              analytic_bubble.py:36
+       _feature_grid: linspace(0, Λ, 96) ∪ linspace(kF ± 0.25, 240) per kF
+       angolo: 48 nodi Chebyshev in u = cos φ (Nota 1)
+
+  ω dove Σ viene davvero valutata              density.py:1519-1525
+     ★ sigma_nomega = 97 indici equispaziati di w_base in [−216, 144]:
+       passo ~7e-3 attorno a 0; da qui il pavimento di ImΣ(kF,0) che fa la
+       larghezza QP a kF.  193 nodi: +0.017 su g_c al punto fisso (P=0.50).
+
+  k dove Σ viene davvero valutata              sigma_engine.py:901
+       select_sigma_k_indices: un linspace più le soglie cinematiche
+       (kF interno ed esterno, q ± kF): i 24 punti NON sono equispaziati.
+       Fra un nodo e l'altro Σ è interpolata linearmente in k.
+
+  ω per-riga — infittimento attorno ai poli    sigma_engine.py:1124
+       rebuild_omega_per_k: ogni riga k ha i suoi nodi addensati sul SUO
+       polo, ma il numero di nodi non cambia (721)
+
+  θ e q dentro ImΣ                             sigma_engine.py:342-540
+       θ: n_theta = 32 su [0, θ*],  cos θ* = (q²+k²−p_max²)/(2qk)
+       q: Gauss-Legendre, q_gl_n = 16 (SIGMA_PN_Q_GL_N)
+
+
+B) EREDITATE DAL CUBO  (mai ricostruite dal ciclo)
+──────────────────────────────────────────────────
+
+  k e w_base arrivano dentro A_komega_*.npz.  Nei cubi di PROD a P=0.50:
+
+      k       406 punti,  [0.0001, 25.1326]
+              312 sotto k = 2, pacchetti larghi 0.02 su ENTRAMBI i kF:
+              dk ≈ 7.3e-4 a kF_dn = 0.7071 e a kF_up = 1.2247
+      w_base  721 punti,  [−630, +630],  dω da 0.001 a 22.1
+      w       (406 × 721): la griglia per-riga di rebuild_omega_per_k
+
+  ★ IL MECCANISMO DEL BUG r30 È STATO TOLTO ALLA FONTE.
+    Prima tutte le P ereditavano la griglia k di un altro P.  Ora:
+      test/make_free_seed.py   seed liberi per ogni P, griglia k rifatta
+                               con smooth_multicenter_grid sui kF di quel P
+                               sotto k = 2 (sopra: i nodi del modello)
+      test/reseed_regrid.py    continuazione in P con la griglia k rifatta
+                               (Σ interpolata in k, A ricostruita)
+      test/reseed_mu.py        cambia solo μ: griglia VECCHIA, va bene solo
+                               per passi piccoli in P
+    Resta vero che ogni iterazione usa la griglia k del suo seed.
+
+  Per ispezionarle:
+      python3 -c "
+      import numpy as np
+      z = np.load('out/cluster/P0p50_prod/iter030/next_cubes/A_komega_spinup_iter030.npz')
+      k = z['k']; d = np.diff(k); print(k.size, k[0], k[-1], d.min(), d.max())"
+
+
+C) COSTRUTTORI CHE ESISTONO MA NON SONO SULLA STRADA VIVA
+─────────────────────────────────────────────────────────
+
+  lattice_grids.py:87    build_q_michele_lattice   q commensurato; impi_table
+                         lo accetta (--q-grid-mode michele_lattice) ma
+                         pairbuild non lo chiede
+  (rimossi dallo slim)   build_k_three_block, eps_union_nodes; di fatto
+                         sostituiti da make_free_seed.k_grid e dall'unione
+                         in ε riscritta in impi_table.py:119
+  spectral.py:58-224     build_split_axis, build_k_grid_with_corridor,
+                         append_outer_k_tails, merge_omega_log_nodes,
+                         build_axes
