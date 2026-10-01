@@ -100,6 +100,21 @@ PATCHES = {
         # pointed at a directory that no longer exists
         ('PIPELINE = ROOT / "true_akw_pipeline"\nsys.path.insert(0, str(PIPELINE))',
          'PIPELINE = ROOT\nsys.path.insert(0, str(ROOT))'),
+        # The BUBBLE's internal-momentum cutoff was the bare literal "4".  It is
+        # the Lambda that enters g0 = -(1/8pi) ln((Lambda^2+eps0)/eps0), so it is
+        # a renormalisation parameter, not a quadrature detail -- and being a
+        # literal it had never been varied, which means the cancellation
+        # Gamma^-1 = g0(Lambda) - Pi(Lambda) had never been tested.
+        ('    parser.add_argument("--omega-feature-half-width", type=float, default=0.0)',
+         '    parser.add_argument("--bubble-p-int-max", type=float, default=4.0,\n'
+         '                        help="internal momentum cutoff of the pair bubble; "\n'
+         '                             "this is the Lambda in g0, so changing it "\n'
+         '                             "changes the bare coupling too")\n'
+         '    parser.add_argument("--omega-feature-half-width", type=float, default=0.0)'),
+        ('            "--p-int-min", "0", "--p-int-max", "4", "--n-p-int", p_nodes,',
+         '            "--p-int-min", "0",\n'
+         '            "--p-int-max", f"{float(args.bubble_p_int_max):.15g}",\n'
+         '            "--n-p-int", p_nodes,'),
     ],
 }
 

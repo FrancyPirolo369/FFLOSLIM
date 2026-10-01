@@ -116,6 +116,81 @@ def _compute_inline_control_scan(
     )
 
 
+def _union_extra_nodes(eps_grid: np.ndarray, core: np.ndarray, omega: float) -> np.ndarray:
+    """PROD_UNION: nodi in eps da aggiungere per questo Omega (nucleo spostato su Omega + Omega).
+
+    Solo quelli dentro l'intervallo del reticolo e non gia' presenti (entro 1e-12)."""
+    extra = np.unique(np.concatenate([np.asarray(core, dtype=float) + float(omega), [float(omega)]]))
+    extra = extra[(extra > float(eps_grid[0])) & (extra < float(eps_grid[-1]))]
+    if extra.size == 0:
+        return extra
+    j = np.clip(np.searchsorted(eps_grid, extra), 1, eps_grid.size - 1)
+    near = np.minimum(np.abs(eps_grid[j] - extra), np.abs(eps_grid[j - 1] - extra))
+    return extra[near > 1.0e-12]
+
+
+def _compute_inline_control_scan_union(
+    omega_grid: np.ndarray,
+    p_grid: np.ndarray,
+    eps_grid: np.ndarray,
+    aup_grid: np.ndarray,
+    control_up_grid: np.ndarray,
+    full_slice_provider,
+    control_slice_provider,
+    up_extra_fn,
+    core: np.ndarray,
+    *,
+    eps_integration_mode: str,
+    p_integration_mode: str,
+    p_split_points: np.ndarray | None,
+    p_gl_n: int,
+) -> tuple[dict[str, np.ndarray], float]:
+    """Come _compute_inline_control_scan, ma con i nodi in eps di ogni Omega estesi da
+    _union_extra_nodes.  up_extra_fn(eps_extra) -> (A_up, A0_up) sui nodi aggiunti; i
+    provider delle fette accettano i nodi in eps come terzo argomento."""
+    omega = np.asarray(omega_grid, dtype=float)
+    eps_grid = np.asarray(eps_grid, dtype=float)
+    aup_grid = np.asarray(aup_grid, dtype=float)
+    control_up_grid = np.asarray(control_up_grid, dtype=float)
+    thermal_raw = np.zeros(omega.size, dtype=float)
+    no_thermal_raw = np.zeros(omega.size, dtype=float)
+    medium_raw = np.zeros(omega.size, dtype=float)
+    support_accum = 0.0
+
+    for io, omega_value in enumerate(omega):
+        extra = _union_extra_nodes(eps_grid, core, float(omega_value))
+        if extra.size:
+            aup_x, cup_x = up_extra_fn(extra)
+            eps_o = np.concatenate([eps_grid, extra])
+            order = np.argsort(eps_o, kind="stable")
+            eps_o = eps_o[order]
+            aup_o = np.concatenate([aup_grid, aup_x], axis=1)[:, order]
+            cup_o = np.concatenate([control_up_grid, cup_x], axis=1)[:, order]
+        else:
+            eps_o, aup_o, cup_o = eps_grid, aup_grid, control_up_grid
+        full_down, full_support = full_slice_provider(int(io), float(omega_value), eps_o)
+        control_down, _ = control_slice_provider(int(io), float(omega_value), eps_o)
+        product_residual = aup_o * np.asarray(full_down, dtype=float) - cup_o * np.asarray(control_down, dtype=float)
+        support_accum += float(np.mean(np.asarray(full_support, dtype=float)))
+        values = compute_impi_raw_totals_for_slice(
+            float(omega_value),
+            p_grid,
+            eps_o,
+            product_residual,
+            np.ones_like(product_residual),
+            eps_integration_mode=eps_integration_mode,
+            p_integration_mode=p_integration_mode,
+            p_split_points=p_split_points,
+            p_gl_n=int(p_gl_n),
+        )
+        thermal_raw[io], no_thermal_raw[io], medium_raw[io] = values
+
+    return (
+        finalize_impi_scan(omega, thermal_raw, no_thermal_raw, medium_raw),
+        support_accum / max(1, omega.size),
+    )
+
+
 def _env_enabled(name: str, default: str = "0") -> bool:
     return str(os.environ.get(name, default)).strip().lower() not in {
         "", "0", "false", "no", "off"
@@ -226,13 +301,14 @@ def _impi_process_worker(task: tuple[int, float]) -> tuple[int, float, np.ndarra
                 kquad_feature_half_width=float(ctx.get("kquad_feature_half_width", 0.05)),
             )
 
-        def _slice_provider(io: int, omega_value: float) -> tuple[np.ndarray, np.ndarray]:
+        def _slice_provider(io: int, omega_value: float,
+                            eps: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray]:
             return precompute_kjac_integrated_slice(
                 kd,
                 wd,
                 ad,
                 p_grid,
-                eps_grid,
+                eps_grid if eps is None else eps,
                 q_value=float(qv),
                 omega_value=float(omega_value),
                 routing=str(ctx["routing"]),
@@ -246,7 +322,8 @@ def _impi_process_worker(task: tuple[int, float]) -> tuple[int, float, np.ndarra
                 eta=float(ctx.get("eta_dn", 1.0e-3)),
             )
 
-        def _control_slice_provider(io: int, omega_value: float) -> tuple[np.ndarray, np.ndarray]:
+        def _control_slice_provider(io: int, omega_value: float,
+                                    eps: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray]:
             if control_kd is None or control_wd is None or control_ad is None:
                 raise RuntimeError("inline control arrays are unavailable in worker")
             return precompute_kjac_integrated_slice(
@@ -254,7 +331,7 @@ def _impi_process_worker(task: tuple[int, float]) -> tuple[int, float, np.ndarra
                 control_wd,
                 control_ad,
                 p_grid,
-                eps_grid,
+                eps_grid if eps is None else eps,
                 q_value=float(qv),
                 omega_value=float(omega_value),
                 routing=str(ctx["routing"]),
@@ -277,7 +354,26 @@ def _impi_process_worker(task: tuple[int, float]) -> tuple[int, float, np.ndarra
             if _p_nest > float(p_grid[0]):
                 _candidates.append(_p_nest)
             _p_split = np.array(_candidates, dtype=float)
-        if inline_control:
+        union_core = ctx.get("union_core", None)
+        if inline_control and union_core is not None:
+            if control_up_grid is None:
+                raise RuntimeError("inline control up grid is unavailable in worker")
+            scan, support_mean_i = _compute_inline_control_scan_union(
+                omega_grid,
+                p_grid,
+                eps_grid,
+                aup_grid,
+                control_up_grid,
+                _slice_provider,
+                _control_slice_provider,
+                ctx["union_up_fn"],
+                np.asarray(union_core, dtype=float),
+                eps_integration_mode=str(ctx["eps_integration_mode"]),
+                p_integration_mode=_p_int_mode,
+                p_split_points=_p_split,
+                p_gl_n=_p_gl_n,
+            )
+        elif inline_control:
             if control_up_grid is None:
                 raise RuntimeError("inline control up grid is unavailable in worker")
             scan, support_mean_i = _compute_inline_control_scan(
@@ -604,6 +700,17 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--eps-grid-mode", choices=("linear", "split", "split_omega", "lattice"), default="split")
     p.add_argument("--eps-split-power", type=float, default=2.5)
     p.add_argument("--eps-integration-mode", choices=("plain", "panel_kinks"), default="plain")
+    p.add_argument(
+        "--eps-union-core",
+        type=float,
+        default=0.0,
+        help="PROD_UNION: per ogni Omega aggiunge ai nodi in eps il nucleo del reticolo "
+             "(|eps| <= questo valore) spostato su eps = Omega, dove sta il livello di Fermi "
+             "del minoritario (Omega - eps = 0), piu' il nodo eps = Omega stesso; l'integrando "
+             "e' calcolato esattamente su ogni nodo invece di interpolare il prodotto fra i "
+             "due nodi vicini all'estremo mobile.  0 = spento.  Richiede --eps-grid-mode "
+             "lattice, sottrazione inline e --parallel-mode processes.",
+    )
     p.add_argument("--p-integration-mode", choices=("plain", "panel_kinks"), default="plain",
                    help="GL panel quadrature for the radial p-integral, splitting at kF_dn and kF_up-Q.")
     p.add_argument("--p-gl-n", type=int, default=8,
@@ -2325,9 +2432,47 @@ def main() -> None:
         im_pi_no_thermal_i = np.asarray(scan["im_pi_no_thermal"], dtype=float)
         return int(iq0), float(support_mean_i), im_pi_full_i, im_pi_med_i, im_pi_no_thermal_i
 
+    union_width = float(args.eps_union_core)
+    union_core = None
+    union_up_fn = None
+    if union_width > 0.0:
+        if eps_mode != "lattice":
+            raise ValueError("--eps-union-core richiede --eps-grid-mode lattice")
+        if not inline_control:
+            raise ValueError("--eps-union-core richiede la sottrazione inline (--subtract-*-cube-path)")
+        if not (mode_l == "processes" and n_workers > 1):
+            raise ValueError("--eps-union-core richiede --parallel-mode processes con piu' di un worker")
+        if angular_mode not in {"kjac", "phipanel"}:
+            raise ValueError("--eps-union-core richiede --angular-mode kjac o phipanel")
+        union_core = eps_grid[np.abs(eps_grid) <= union_width]
+
+        def union_up_fn(eps_extra: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+            # A_up e A0_up sui nodi aggiunti, con lo stesso metodo della griglia principale
+            if internal_rebuild:
+                a_x, in_x = _rebuild_a_bilinear(
+                    p_grid[:, None], eps_extra[None, :], ku, wu, re_up, im_up,
+                    mu=float(mu_up), sigma0=float(sigma0_up), eta=float(eta_up),
+                )
+            else:
+                a_x, in_x = bilinear_eval_with_support(
+                    p_grid[:, None], eps_extra[None, :], ku, wu, au_integral
+                )
+            c_x, in_c = bilinear_eval_with_support(
+                p_grid[:, None], eps_extra[None, :], control_ku, control_wu, control_au
+            )
+            return np.where(in_x, a_x, 0.0), np.where(in_c, c_x, 0.0)
+
+        print(
+            f"[impi] PROD_UNION: nucleo |eps| <= {union_width:g} ({union_core.size} nodi) "
+            "spostato su eps = Omega per ogni Omega",
+            flush=True,
+        )
+
     if mode_l == "processes" and n_workers > 1:
         global _IMPI_WORKER_CTX
         _IMPI_WORKER_CTX = {
+            "union_core": union_core,
+            "union_up_fn": union_up_fn,
             "kd": kd,
             "wd": wd,
             "ad": ad_integral,
@@ -2576,6 +2721,7 @@ def main() -> None:
         q_feature_half_width=np.array(float(args.q_feature_half_width), dtype=np.float64),
         q_feature_n_local=np.array(int(args.q_feature_n_local), dtype=np.int64),
         eps_integration_mode=np.array(str(args.eps_integration_mode)),
+        eps_union_core=np.array(float(args.eps_union_core)),
         omega_feature_half_width=np.array(float(args.omega_feature_half_width), dtype=np.float64),
         omega_feature_n_local=np.array(int(args.omega_feature_n_local), dtype=np.int64),
         omega_feature_mode=np.array(str(args.omega_feature_mode)),

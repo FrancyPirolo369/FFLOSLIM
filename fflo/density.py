@@ -1243,7 +1243,8 @@ def main() -> None:
         "--thouless-q-mode",
         choices=("qff", "global-max"),
         default="qff",
-        help="Choose the raw omega=0 pair row used for the Thouless shift.",
+        help="Choose the raw omega=0 pair row used for the Thouless shift "
+             "(global-max: maximum over Q <= 2 qff).",
     )
     parser.add_argument(
         "--eta-floor-mode",
@@ -1396,7 +1397,12 @@ def main() -> None:
         re_inv_native = np.asarray(pair_native["ReInvGamma"], dtype=float)
         iw = int(np.argmin(np.abs(omega_native)))
         if args.thouless_q_mode == "global-max":
-            iq = int(np.nanargmax(re_inv_native[:, iw]))
+            # Massimo cercato solo in Q <= 2 qff (qff teorico, sqrt(mu_up) - sqrt(mu_dn)):
+            # contiene sia Q = 0 sia l'anello FFLO, oltre non c'e' fisica.  2026-09-29: una
+            # sola riga rotta nella coda UV della tabella (Q = 11.6 e 15.8, ReGamma^-1 ~ 0
+            # contro -0.21 delle vicine) era diventata il massimo e si era presa il pin.
+            q_window = q_native <= 2.0 * qff
+            iq = int(np.nanargmax(np.where(q_window, re_inv_native[:, iw], -np.inf)))
         else:
             iq = int(np.argmin(np.abs(q_native - qff)))
         pair_q_selected = float(q_native[iq])

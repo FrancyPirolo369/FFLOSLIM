@@ -64,6 +64,11 @@ def parse_args() -> argparse.Namespace:
         help="Use the matched control variate or integrate the full A*A product directly.",
     )
     parser.add_argument("--lattice-n-linear", type=int, default=0)
+    parser.add_argument("--lattice-dw", type=float, default=1.0e-3,
+                        help="passo fine dei reticoli in Omega ed eps di impi_table.  Se diverso "
+                             "da 1e-3 e --lattice-n-linear non e' dato, il blocco lineare del "
+                             "profilo viene riscalato per tenere la stessa larghezza.  2.5e-4 "
+                             "risolve il polo del minoritario a kF ad alta P (larghezza 2 Z eta)")
     parser.add_argument("--lattice-n-tail", type=int, default=0)
     parser.add_argument("--p-nodes", type=int, default=0)
     parser.add_argument("--p-feature-width", type=float, default=float("nan"))
@@ -93,6 +98,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--q-local-center", type=float, default=float("nan"))
     parser.add_argument("--q-local-half-width", type=float, default=0.0)
     parser.add_argument("--q-local-dq", type=float, default=0.0)
+    parser.add_argument("--eps-union-core", type=float, default=0.0,
+                        help="PROD_UNION: nodi in eps del reticolo spostati su eps = Omega "
+                             "(vedi impi_table --eps-union-core); 0 = spento")
+    parser.add_argument("--bubble-p-int-max", type=float, default=4.0,
+                        help="internal momentum cutoff of the pair bubble; "
+                             "this is the Lambda in g0, so changing it "
+                             "changes the bare coupling too")
     parser.add_argument("--omega-feature-half-width", type=float, default=0.0)
     parser.add_argument("--omega-feature-nodes", type=int, default=0)
     parser.add_argument(
@@ -237,8 +249,14 @@ def main() -> None:
         angular_feature_nodes = "21"
         coherent_nk = 448
         coherent_nquad = 160
+    lattice_dw = float(args.lattice_dw)
+    if not (np.isfinite(lattice_dw) and lattice_dw > 0.0):
+        raise ValueError("--lattice-dw deve essere positivo")
     if args.lattice_n_linear > 0:
         lattice_linear = str(args.lattice_n_linear)
+    elif abs(lattice_dw - 1.0e-3) > 1.0e-12:
+        # stessa larghezza del blocco lineare del profilo (n_linear * dw)
+        lattice_linear = str(int(round(int(lattice_linear) * 1.0e-3 / lattice_dw)))
     if args.lattice_n_tail > 0:
         lattice_tail = str(args.lattice_n_tail)
     if args.p_nodes > 0:
@@ -308,7 +326,7 @@ def main() -> None:
             "--omega-min", "-12", "--omega-max", "12", "--n-omega", "101",
             "--omega-tail-max", "240", "--omega-tail-n", "10",
             "--omega-tail-side", "symmetric", "--omega-grid-mode", "lattice",
-            "--lattice-dw", "0.001", "--lattice-n-linear", lattice_linear,
+            "--lattice-dw", f"{lattice_dw:.15g}", "--lattice-n-linear", lattice_linear,
             "--lattice-n-tail", lattice_tail,
             "--omega-feature-half-width", f"{float(args.omega_feature_half_width):.15g}",
             "--omega-feature-n-local", str(int(args.omega_feature_nodes)),
@@ -316,7 +334,9 @@ def main() -> None:
             "--omega-feature-q-min", f"{float(args.omega_feature_q_min):.15g}",
             "--omega-feature-q-max", f"{float(args.omega_feature_q_max):.15g}",
             "--omega-feature-q-max-points", str(int(args.omega_feature_q_max_points)),
-            "--p-int-min", "0", "--p-int-max", "4", "--n-p-int", p_nodes,
+            "--p-int-min", "0",
+            "--p-int-max", f"{float(args.bubble_p_int_max):.15g}",
+            "--n-p-int", p_nodes,
             "--p-grid-mode", "linear", "--p-feature-half-width", p_feature_width,
             "--p-feature-n-local", p_feature_nodes, "--p-feature-mode", "kf_and_shells",
             "--kf-feature-source", str(args.kf_feature_source),
@@ -339,6 +359,8 @@ def main() -> None:
                 "--subtract-up-cube-path", str(qp_up),
                 "--subtract-down-cube-path", str(qp_down),
             ]
+        if float(args.eps_union_core) > 0.0:
+            command += ["--eps-union-core", f"{float(args.eps_union_core):.15g}"]
         env = dict(os.environ)
         env.update(
             IMPI_INTERNAL_REBUILD="1",
@@ -428,6 +450,8 @@ def main() -> None:
         f"q_nodes={q.size} omega_nodes={omega.size}",
         f"q_table_max={q_table_max:.12g}",
         f"workers={workers}",
+        f"eps_union_core={float(args.eps_union_core):g}",
+        f"lattice_dw={float(args.lattice_dw):g}",
         f"profile={args.profile}",
         f"kf_feature_source={args.kf_feature_source}",
         f"formula={formula}",
