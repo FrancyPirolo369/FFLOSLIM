@@ -1,0 +1,6 @@
+### DENSITY  zero   (nQ=42 nW=141)
+[density-clean] shifted-pair contact: Delta_inf^2=2.32523150376 C=0.58130787594
+[density-clean] safe update k<= 6 (362/406), omega=[-215.825,140.617] (649/721)
+[density-clean] adaptive Sigma omega grid: 41/649 nodes
+[density-clean] computing Sigma_up
+[density-clean] Sigma_up: 10 concurrent k workers (processes)

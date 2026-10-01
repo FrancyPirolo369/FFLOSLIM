@@ -1,0 +1,28 @@
+=== bubble cutoff Lambda = 4 ===
+ImPi product test: matched
+up=/home/francy/Desktop/FFLO_pristinee/X_FFLO_SLIM/seeds/A_komega_spinup_warm.npz
+down=/home/francy/Desktop/FFLO_pristinee/X_FFLO_SLIM/seeds/A_komega_spindown_warm.npz
+q_nodes=42 omega_nodes=141
+q_table_max=12
+workers=10
+profile=turbo
+kf_feature_source=free
+formula=Grid[A*A-A0*A0] + SemiAnalytic[A0*A0]
+full_line=internal rebuild from ReS/ImS
+control_line=canonical QP A0 evaluated directly
+new ReInvGamma_max=-1.942500762372e-02 q=0.706070386248
+
+=== bubble cutoff Lambda = 6 ===
+ImPi product test: matched
+up=/home/francy/Desktop/FFLO_pristinee/X_FFLO_SLIM/seeds/A_komega_spinup_warm.npz
+down=/home/francy/Desktop/FFLO_pristinee/X_FFLO_SLIM/seeds/A_komega_spindown_warm.npz
+q_nodes=42 omega_nodes=141
+q_table_max=12
+workers=10
+profile=turbo
+kf_feature_source=free
+formula=Grid[A*A-A0*A0] + SemiAnalytic[A0*A0]
+full_line=internal rebuild from ReS/ImS
+control_line=canonical QP A0 evaluated directly
+new ReInvGamma_max=-1.915441657790e-02 q=0.706070386248
+

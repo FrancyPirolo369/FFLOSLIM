@@ -1,0 +1,56 @@
+=== zero : mode=zero hw=1.35 nodes=21 ===
+ImPi product test: matched
+up=/home/francy/Desktop/FFLO_pristinee/X_FFLO_SLIM/seeds/A_komega_spinup_warm.npz
+down=/home/francy/Desktop/FFLO_pristinee/X_FFLO_SLIM/seeds/A_komega_spindown_warm.npz
+q_nodes=42 omega_nodes=141
+q_table_max=12
+workers=10
+profile=turbo
+kf_feature_source=free
+formula=Grid[A*A-A0*A0] + SemiAnalytic[A0*A0]
+full_line=internal rebuild from ReS/ImS
+control_line=canonical QP A0 evaluated directly
+new ReInvGamma_max=-1.942500762372e-02 q=0.706070386248
+
+=== thresh : mode=zero_and_thresholds hw=1.35 nodes=21 ===
+ImPi product test: matched
+up=/home/francy/Desktop/FFLO_pristinee/X_FFLO_SLIM/seeds/A_komega_spinup_warm.npz
+down=/home/francy/Desktop/FFLO_pristinee/X_FFLO_SLIM/seeds/A_komega_spindown_warm.npz
+q_nodes=42 omega_nodes=1023
+q_table_max=12
+workers=10
+profile=turbo
+kf_feature_source=free
+formula=Grid[A*A-A0*A0] + SemiAnalytic[A0*A0]
+full_line=internal rebuild from ReS/ImS
+control_line=canonical QP A0 evaluated directly
+new ReInvGamma_max=-1.413069884699e-02 q=0.706070386248
+
+=== paper : mode=paper_thresholds hw=1.35 nodes=21 ===
+ImPi product test: matched
+up=/home/francy/Desktop/FFLO_pristinee/X_FFLO_SLIM/seeds/A_komega_spinup_warm.npz
+down=/home/francy/Desktop/FFLO_pristinee/X_FFLO_SLIM/seeds/A_komega_spindown_warm.npz
+q_nodes=42 omega_nodes=4509
+q_table_max=12
+workers=10
+profile=turbo
+kf_feature_source=free
+formula=Grid[A*A-A0*A0] + SemiAnalytic[A0*A0]
+full_line=internal rebuild from ReS/ImS
+control_line=canonical QP A0 evaluated directly
+new ReInvGamma_max=-1.415240359222e-02 q=0.706070386248
+
+=== thresh_wide : mode=zero_and_thresholds hw=2.50 nodes=41 ===
+ImPi product test: matched
+up=/home/francy/Desktop/FFLO_pristinee/X_FFLO_SLIM/seeds/A_komega_spinup_warm.npz
+down=/home/francy/Desktop/FFLO_pristinee/X_FFLO_SLIM/seeds/A_komega_spindown_warm.npz
+q_nodes=42 omega_nodes=1858
+q_table_max=12
+workers=10
+profile=turbo
+kf_feature_source=free
+formula=Grid[A*A-A0*A0] + SemiAnalytic[A0*A0]
+full_line=internal rebuild from ReS/ImS
+control_line=canonical QP A0 evaluated directly
+new ReInvGamma_max=-1.415104985815e-02 q=0.706070386248
+

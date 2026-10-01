@@ -1,0 +1,2 @@
+nodi q: 75
+### PAIR base  (omega-mode=zero hw=1.35 n=21)
