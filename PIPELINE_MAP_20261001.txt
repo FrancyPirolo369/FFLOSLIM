@@ -59,8 +59,8 @@ modifiche sono state copiate sul cluster in cluster_bundle_20260922/ (Nota 3).
      source ~/venvs/fflo-sc/bin/activate       │
      OMP_NUM_THREADS=1  ← il parallelismo      │  run_test.py:369-371
                           è a PROCESSI         │  env.setdefault(v, "1")
-     run_test.py --workers 28                  │
-                 --time-budget 215 $ARGS  :35  │
+     run_test.py --workers 28    run.slurm:35  │
+                 --time-budget 215 $ARGS       │
  ★   a fine job, se iterazioni < TARGET, si    │
      risottomette da solo        run.slurm:40  │
      (AUTOCHAIN=0 lo spegne)                   │
@@ -184,7 +184,7 @@ modifiche sono state copiate sul cluster in cluster_bundle_20260922/ (Nota 3).
 │          toglie solo il punto di misura nulla |Γ⁻¹| ≤ 1e-14; 'broad'       │
 │          rimpiazzava ImΓ⁻¹ in tutte le celle con |Re|,|Im| < η e faceva    │
 │          l'eccesso di densità fresco                                       │
-│        ──► proxy_pair_pinned.npz con pair_shift, pair_q_selected  :1445    │
+│        ──► proxy_pair_pinned.npz + pair_q_selected   density.py:1445       │
 │                   │                                                        │
 │                   ▼                                                        │
 │   3. pair_contact_from_shifted_table(...)      density.py:1455 (def :200)  │
@@ -203,7 +203,7 @@ modifiche sono state copiate sul cluster in cluster_bundle_20260922/ (Nota 3).
 │            taglio angolare esatto a |p| ≤ pintmax = 12                     │
 │      ★ costo = sigma_nk × sigma_nomega = 24 × 97 = 2328 per spin           │
 │          i 97 ω sono indici equispaziati di w_base nella finestra          │
-│          (density.py:1519-1525): passo ~7e-3 attorno a 0                   │
+│          (density.py:1520-1525): passo ~7e-3 attorno a 0                   │
 │          (41 nodi: 1.6e-2;  193 nodi: 3.5e-3)                              │
 │      ★ oltre k = 8  (--high-k-sigma pair-contact)  density.py:1565-1571    │
 │          ImΣ = −Δ∞² η_c / (x² + η_c²),   x = ω + k²/m − μ_interno          │
@@ -488,7 +488,7 @@ A) COSTRUITE A RUNTIME
        _feature_grid: linspace(0, Λ, 96) ∪ linspace(kF ± 0.25, 240) per kF
        angolo: 48 nodi Chebyshev in u = cos φ (Nota 1)
 
-  ω dove Σ viene davvero valutata              density.py:1519-1525
+  ω dove Σ viene davvero valutata              density.py:1520-1525
      ★ sigma_nomega = 97 indici equispaziati di w_base in [−216, 144]:
        passo ~7e-3 attorno a 0; da qui il pavimento di ImΣ(kF,0) che fa la
        larghezza QP a kF.  193 nodi: +0.017 su g_c al punto fisso (P=0.50).
