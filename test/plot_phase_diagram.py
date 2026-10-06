@@ -94,7 +94,24 @@ def gmax_correction(run_dir):
     return float(-4.0 * np.pi * (re0[imax] - re0[iq])), float(q[imax] / qff)
 
 
-def collect(base, families, gmax_corr, min_iters, pbcs_qmax=0.1):
+def two_candidate(run_dir):
+    """g_c col pin a due candidati 2D (qff esatto o la piu' piccola Q > 0, come density
+    --thouless-q-mode qff-or-zero) dall'ultima snapshot: (g_c, Q/qff del candidato)."""
+    snaps = sorted(glob.glob(os.path.join(run_dir, "snap", "iter*.npz")))
+    if not snaps:
+        return None
+    z = np.load(snaps[-1])
+    q, w = np.asarray(z["q"], float), np.asarray(z["omega"], float)
+    re0 = np.asarray(z["ReInvGamma"], float)[:, int(np.argmin(np.abs(w)))]
+    qff = float(z["qff"])
+    iq = int(np.argmin(np.abs(q - qff)))
+    nz = np.flatnonzero(q > 1.0e-9)
+    i0 = int(nz[np.argmin(q[nz])])
+    j = iq if re0[iq] >= re0[i0] else i0
+    return float(g_of(re0[j])), float(q[j] / qff)
+
+
+def collect(base, families, gmax_corr, min_iters, pbcs_qmax=0.1, two_cand=False):
     """Ultima iterazione per P; phase = pBCS se il Q del Thouless e' < pbcs_qmax * qff."""
     pts = {}
     for fam in families:
@@ -107,7 +124,10 @@ def collect(base, families, gmax_corr, min_iters, pbcs_qmax=0.1):
             if r is None or r[0] < min_iters:
                 continue
             corr, qrel = 0.0, r[3]
-            if gmax_corr and fam in ("prod", "etaexact"):
+            tc = two_candidate(d) if two_cand else None
+            if tc is not None:
+                corr, qrel = tc[0] - r[1], tc[1]
+            elif gmax_corr and fam in ("prod", "etaexact"):
                 # pinnate a qff: g e Q diventano quelli del massimo globale
                 corr, qrel = gmax_correction(d)
             if qrel is None:
@@ -138,6 +158,11 @@ def main(argv):
     ap.add_argument("--families", default="prod_union_fine,prod_union,prodg,gmax,prod,x75a0p3,x75a0p6")
     ap.add_argument("--min-iters", type=int, default=1)
     ap.add_argument("--no-gmax-corr", action="store_true")
+    ap.add_argument("--two-cand", action="store_true",
+                    help="g_c col pin a due candidati (qff esatto o Q -> 0) ricalcolato dall'ultima "
+                         "snapshot; sostituisce la correzione al massimo globale (ritirata in 2D)")
+    ap.add_argument("--xerr", default="",
+                    help="barre d'errore orizzontali su g_c: 'e' per tutti o 'P:e,P:e,...'")
     ap.add_argument("--exclude", default="", help="P da togliere, separate da virgole ('' = nessuna)")
     ap.add_argument("--smooth", type=float, default=0.03,
                     help="scarto tipico per punto della spline in g_c (0 = interpolante)")
@@ -156,10 +181,16 @@ def main(argv):
     from scipy.interpolate import UnivariateSpline
 
     excl = {round(float(x), 4) for x in a.exclude.split(",") if x.strip()}
-    pts = collect(a.base, [f.strip() for f in a.families.split(",")], not a.no_gmax_corr,
-                  a.min_iters, a.pbcs_qmax)
+    pts = collect(a.base, [f.strip() for f in a.families.split(",")],
+                  not a.no_gmax_corr and not a.two_cand, a.min_iters, a.pbcs_qmax, a.two_cand)
+    xerr = {}
+    if a.xerr:
+        if ":" in a.xerr:
+            xerr = {round(float(k), 4): float(v) for k, v in (x.split(":") for x in a.xerr.split(","))}
+        else:
+            xerr = {round(p, 4): float(a.xerr) for p in pts}
     keep = [pts[p] for p in sorted(pts) if round(p, 4) not in excl]
-    print(f"{'P':>5s}  famiglia  it   g_c     (corr. max globale)  deriva/it  Q/qff  ramo")
+    print(f"{'P':>5s}  famiglia  it   g_c     ({'corr. 2 candidati' if a.two_cand else 'corr. max globale'})  deriva/it  Q/qff  ramo")
     for p in sorted(pts):
         r = pts[p]
         tag = "  ESCLUSO" if round(p, 4) in excl else ""
@@ -205,6 +236,10 @@ def main(argv):
     for phase, lab in (("FFLO", "FFLO (Q ≠ 0)"), ("pBCS", "pBCS (Q = 0)")):
         rr = [r for r in keep if r["phase"] == phase]
         if rr:
+            ex = [xerr.get(round(r["p"], 4), 0.0) for r in rr]
+            if any(ex):
+                ax.errorbar([r["g"] for r in rr], [r["p"] for r in rr], xerr=ex, fmt="none",
+                            ecolor=col_of[phase], elinewidth=1.0, capsize=2.5, alpha=0.8)
             ax.plot([r["g"] for r in rr], [r["p"] for r in rr], mark_of[phase],
                     color=col_of[phase], ms=7, mec="#fcfcfb", mew=1.2, label=lab)
     for r in keep:
