@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import os
+import re
 from pathlib import Path
 import sys
 
@@ -117,6 +118,106 @@ def occupied_nk(a: np.ndarray, w: np.ndarray) -> np.ndarray:
         ],
         dtype=float,
     )
+
+
+def pole_quadrature_correction(
+    k: np.ndarray, w: np.ndarray, re_rows: np.ndarray, im_rows: np.ndarray, *,
+    mu: float, mass: float, sigma0: float, eta: float, band: float = 0.3,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Quadrature error of the quasiparticle pole on the row grids, for n(k) and int A.
+
+    Near kF the QP Lorentzian of width Z(|ImSigma| + eta) can be narrower than the row's omega
+    spacing (1e-4 against ~1e-3 at high P): the trapezoid then over/under-counts it (int A up to
+    1.2 at kF_dn, 2026-09-29).  For each row with |k - kF| < band*kF and a Dyson root E,
+        L(w) = (Z/pi) Gamma / ((w - E)^2 + Gamma^2),  Z = 1/(1 - dReSigma/dw|E),  Gamma = Z(|ImSigma(E)| + eta)
+    the correction is [exact integral of L] - [the same trapezoid applied to L]: added to the trapezoid
+    of A it equals the subtraction cure of test/pole_probe.py (row error 0.1 -> 0.002, density bias at
+    high P +0.5% -> 0).  Returns (dn_occupied, dn_total) per row; zero where no pole is found."""
+    k = np.asarray(k, dtype=float)
+    w = np.asarray(w, dtype=float)
+    kf = float(np.sqrt(max(float(mass) * float(mu), 0.0)))
+    dn = np.zeros(k.size, dtype=float)
+    ds = np.zeros(k.size, dtype=float)
+    for i in np.flatnonzero(np.abs(k - kf) < float(band) * kf):
+        wi = w[i] if w.ndim == 2 else w
+        re_i, im_i = np.asarray(re_rows[i], float), np.asarray(im_rows[i], float)
+        ok = np.isfinite(wi) & np.isfinite(re_i) & np.isfinite(im_i)
+        if np.count_nonzero(ok) < 4:
+            continue                                  # riga senza Sigma utilizzabile: resta il trapezio
+        wi, re_i, im_i = wi[ok], re_i[ok], im_i[ok]   # (2026-10-03: nel seed ci sono nodi non finiti)
+        xi = k[i] ** 2 / float(mass) - float(mu)
+        f = wi - xi - (re_i - float(sigma0))
+        sc = np.flatnonzero(np.sign(f[:-1]) * np.sign(f[1:]) < 0)
+        if sc.size == 0:
+            continue
+        best = None
+        for j in sc:
+            e = wi[j] - f[j] * (wi[j + 1] - wi[j]) / (f[j + 1] - f[j])
+            slope = (re_i[j + 1] - re_i[j]) / (wi[j + 1] - wi[j])
+            z = 1.0 / (1.0 - slope) if slope < 1.0 else np.nan
+            if not np.isfinite(z) or z <= 0.0:
+                continue
+            gam = z * (abs(float(np.interp(e, wi, im_i))) + float(eta))
+            peak = z / (np.pi * gam)
+            if best is None or peak > best[3]:
+                best = (e, z, gam, peak)
+        if best is None:
+            continue
+        e, z, gam, _ = best
+        lor = (z / np.pi) * gam / ((wi - e) ** 2 + gam ** 2)
+        neg = wi <= 0.0
+        exact_occ = z * (np.arctan((0.0 - e) / gam) - np.arctan((wi[0] - e) / gam)) / np.pi
+        exact_tot = z * (np.arctan((wi[-1] - e) / gam) - np.arctan((wi[0] - e) / gam)) / np.pi
+        dn[i] = exact_occ - np.trapezoid(lor[neg], wi[neg])
+        ds[i] = exact_tot - np.trapezoid(lor, wi)
+    return dn, ds
+
+
+def occupied_nk_fine(
+    k: np.ndarray, w: np.ndarray, re_rows: np.ndarray, im_rows: np.ndarray, nk_rows: np.ndarray, *,
+    mu: float, mass: float, sigma0: float, eta: float, band: float = 0.3, n_geo: int = 400,
+    kmax: float | None = None,
+) -> np.ndarray:
+    """n(k) with the omega integral resolved at the quasiparticle pole (2026-10-02).
+
+    Near kF the pole of A(k, w) is narrower than the row's omega spacing and, close to the critical
+    point, not Lorentzian (ImSigma ~ |w|^0.7 inside its width), so neither the trapezoid on the row
+    nor a Lorentzian correction gives a smooth n(k) (the spike at kF_dn).  For rows with
+    |k - kF| < band*kF the occupied integral is redone on the row grid merged with geometric nodes
+    toward w = 0 and toward the Dyson root E, with the cube's own spectral function
+        A = (1/pi) Gam / ((w - xi - (ReSigma - sigma0))^2 + Gam^2),  Gam = |ImSigma| + eta,
+    Sigma interpolated linearly on the row nodes.  Other rows keep nk_rows.  Diagnostic only:
+    with sigma0 mode 'fermi' n(k) does not feed back into the cycle."""
+    k = np.asarray(k, dtype=float)
+    w = np.asarray(w, dtype=float)
+    out = np.asarray(nk_rows, dtype=float).copy()
+    kf = float(np.sqrt(max(float(mass) * float(mu), 0.0)))
+    geo0 = -np.geomspace(1.0e-8, 2.0, int(n_geo))
+    # kmax (2026-10-03): tutte le righe con k <= kmax (dentro tutto il mare di Fermi, dove ad alta P il polo
+    # occupato del minoritario e' stretto ovunque, e nella coda col polo molecolare); None = solo la banda
+    rows = (np.flatnonzero(k <= float(kmax)) if kmax is not None
+            else np.flatnonzero(np.abs(k - kf) < float(band) * kf))
+    for i in rows:
+        wi = w[i] if w.ndim == 2 else w
+        re_i, im_i = np.asarray(re_rows[i], float), np.asarray(im_rows[i], float)
+        xi = k[i] ** 2 / float(mass) - float(mu)
+        f = wi - xi - (re_i - float(sigma0))
+        nodes = [wi[wi <= 0.0], geo0, [0.0]]
+        sc = np.flatnonzero(np.sign(f[:-1]) * np.sign(f[1:]) < 0)
+        for j in sc:
+            e = wi[j] - f[j] * (wi[j + 1] - wi[j]) / (f[j + 1] - f[j])
+            if e < 0.0:
+                d = np.geomspace(1.0e-8, min(0.05, abs(e)), int(n_geo) // 2)
+                nodes += [e - d, e + d, [e]]
+        g = np.unique(np.concatenate(nodes))
+        g = g[(g <= 0.0) & (g >= wi[0])]
+        re_g = np.interp(g, wi, re_i)
+        gam = np.abs(np.interp(g, wi, im_i)) + float(eta)
+        a = gam / np.pi / ((g - xi - (re_g - float(sigma0))) ** 2 + gam ** 2)
+        val = np.trapezoid(a, g)
+        if np.isfinite(val):
+            out[i] = val
+    return out
 
 
 def row_sum_rule(a: np.ndarray, w: np.ndarray) -> np.ndarray:
@@ -662,8 +763,13 @@ def memory_safe_im_sigma(
     omega_chunk: int,
     workers: int,
     checkpoint: Path,
+    sigma_k_kf_offsets: tuple[float, ...] = (),
 ) -> np.ndarray:
-    """Evaluate sparse Sigma rows serially and checkpoint after every row."""
+    """Evaluate sparse Sigma rows serially and checkpoint after every row.
+
+    sigma_k_kf_offsets: extra anchors at kF_external * (1 -+ d) for each d, added ON TOP of
+    sigma_nk (the farthest-point fill keeps its budget).  At high P the minority polaron band
+    spans 0 .. ~2 kF while the default nodes near kF sit at ~0.5 and ~2.2 kF (2026-10-01)."""
     from scipy.interpolate import PchipInterpolator
 
     mu_internal = float(physics.mu_down if spin == "up" else physics.mu_up)
@@ -683,6 +789,9 @@ def memory_safe_im_sigma(
         0.5 * (float(qff) + float(kf_internal)),
         float(kf_internal) + 0.5 * float(qff),
     ]
+    for d in sigma_k_kf_offsets:
+        anchors += [float(kf_external) * (1.0 - float(d)), float(kf_external) * (1.0 + float(d))]
+    sigma_nk = int(sigma_nk) + 2 * len(tuple(sigma_k_kf_offsets))
     selected_set = {
         int(np.argmin(np.abs(k_target - value)))
         for value in anchors
@@ -1241,11 +1350,17 @@ def main() -> None:
     parser.add_argument("--subcritical-delta", type=float, default=0.0)
     parser.add_argument(
         "--thouless-q-mode",
-        choices=("qff", "global-max"),
+        choices=("qff", "global-max", "qff-or-zero", "qff-or-zero-fit"),
         default="qff",
         help="Choose the raw omega=0 pair row used for the Thouless shift "
-             "(global-max: maximum over Q <= 2 qff).",
+             "(global-max: maximum over Q <= 2 qff; qff-or-zero: the higher of the two 2D "
+             "candidates, the row nearest to qff and the smallest NONZERO Q row -- the Q = 0 "
+             "row itself is numerically special in the grid bubble).",
     )
+    parser.add_argument("--zero-fit-qmin", type=float, default=0.02,
+                        help="qff-or-zero-fit: lower end of the Q window (units of qff) of the plateau fit")
+    parser.add_argument("--zero-fit-qmax", type=float, default=0.15,
+                        help="qff-or-zero-fit: upper end of the Q window (units of qff) of the plateau fit")
     parser.add_argument(
         "--eta-floor-mode",
         choices=("broad", "exact_zero"),
@@ -1275,6 +1390,35 @@ def main() -> None:
         ),
     )
     parser.add_argument("--sigma-nomega", type=int, default=97)
+    parser.add_argument(
+        "--sigma-omega-dense-half-width",
+        type=float,
+        default=0.0,
+        help="Add to the Sigma omega nodes every --sigma-omega-dense-stride-th w_base node with "
+             "|w| <= this value (0 = off).  At high P the minority polaron band is only "
+             "~0.02-0.07 wide while the index-uniform nodes are ~7e-3 apart near w = 0.",
+    )
+    parser.add_argument("--sigma-omega-dense-stride", type=int, default=2)
+    parser.add_argument(
+        "--density-fine-pole", action="store_true",
+        help="n(k) with the omega integral redone at the QP pole on a merged geometric grid (rows within "
+             "0.3 kF of kF), with the cube's own A: removes the spike of n(k) at kF (2026-10-02). "
+             "Diagnostic only (sigma0 mode fermi)",
+    )
+    parser.add_argument(
+        "--density-pole-subtract",
+        action="store_true",
+        help="Correct n(k) and int A for the quadrature error of narrow QP poles near kF "
+             "(pole_quadrature_correction).  Reporting only: n(k) does not feed back into the loop "
+             "with sigma0 in Fermi mode.",
+    )
+    parser.add_argument(
+        "--sigma-k-kf-offsets",
+        default="",
+        help="d values separated by ':' (or ','): extra Sigma k nodes at kF*(1 -+ d) for each spin, on top "
+             "of --sigma-nk (empty = off).  Confines the kF row's non-FL cusp and resolves the "
+             "narrow minority polaron band at high P.",
+    )
     parser.add_argument("--n-theta", type=int, default=64)
     parser.add_argument("--omega-chunk", type=int, default=16)
     parser.add_argument("--pole-refind-n-local", type=int, default=61)
@@ -1403,6 +1547,42 @@ def main() -> None:
             # contro -0.21 delle vicine) era diventata il massimo e si era presa il pin.
             q_window = q_native <= 2.0 * qff
             iq = int(np.nanargmax(np.where(q_window, re_inv_native[:, iw], -np.inf)))
+        elif args.thouless_q_mode == "qff-or-zero":
+            # In 2D i candidati fisici sono due: qff = kF_up - kF_dn esatto (tangenza) e Q = 0
+            # (canale di molecola).  Come riga "Q = 0" si prende la piu' piccola Q > 0: la riga
+            # Q = 0 esatta ha un integrale angolare degenere nella bolla a griglia ed e' fuori
+            # di ~1 delta rispetto alle vicine (2026-10-01).  ReGamma^-1 e' pari in Q.
+            iq_ff = int(np.argmin(np.abs(q_native - qff)))
+            nonzero = np.flatnonzero(q_native > 1.0e-9)
+            iq_0 = int(nonzero[np.argmin(q_native[nonzero])])
+            iq = iq_ff if re_inv_native[iq_ff, iw] >= re_inv_native[iq_0, iw] else iq_0
+        elif args.thouless_q_mode == "qff-or-zero-fit":
+            # 2026-10-03: le prime righe a Q -> 0 sono anomale (la KK sulla griglia Omega vede il bordo
+            # di Pauli particella-particella scorrere su nodi radi: a P = 0.85 Q0+ sta ~1.5 delta sotto
+            # l'altopiano).  Il canale Q ~ 0 vale l'estrapolazione a Q = 0 di un fit pari a + b Q^2 sulle
+            # righe buone in [zero_fit_qmin, zero_fit_qmax] qff; se vince, lo shift e' a.
+            iq_ff = int(np.argmin(np.abs(q_native - qff)))
+            win = np.flatnonzero((q_native >= float(args.zero_fit_qmin) * qff)
+                                 & (q_native <= float(args.zero_fit_qmax) * qff))
+            nonzero = np.flatnonzero(q_native > 1.0e-9)
+            iq_0 = int(nonzero[np.argmin(q_native[nonzero])])
+            if win.size >= 3:
+                coef = np.polyfit(q_native[win] ** 2, re_inv_native[win, iw], 1)
+                zero_value = float(coef[1])
+                resid = re_inv_native[win, iw] - np.polyval(coef, q_native[win] ** 2)
+                print(f"[density] qff-or-zero-fit: {win.size} righe in [{args.zero_fit_qmin:g}, "
+                      f"{args.zero_fit_qmax:g}] qff, ReG^-1(Q->0) = {zero_value:+.6e} (RMS fit "
+                      f"{np.sqrt(np.mean(resid ** 2)):.2e}, max riga {re_inv_native[win, iw].max():+.6e}), "
+                      f"Q0+ {re_inv_native[iq_0, iw]:+.6e}, qff {re_inv_native[iq_ff, iw]:+.6e}", flush=True)
+            else:
+                zero_value = float(re_inv_native[iq_0, iw])
+                print(f"[density] qff-or-zero-fit: solo {win.size} righe nella finestra, uso Q0+", flush=True)
+            if zero_value > float(re_inv_native[iq_ff, iw]):
+                iq = iq_0
+                _zero_fit_shift = zero_value
+            else:
+                iq = iq_ff
+                _zero_fit_shift = None
         else:
             iq = int(np.argmin(np.abs(q_native - qff)))
         pair_q_selected = float(q_native[iq])
@@ -1412,6 +1592,8 @@ def main() -> None:
         # normale (shift ricalcolato dalla tabella corrente).
         _shift_env = str(os.environ.get("PAIR_SHIFT_FIXED", "")).strip()
         _shift_override = float(_shift_env) if _shift_env else None
+        if _shift_override is None and args.thouless_q_mode == "qff-or-zero-fit":
+            _shift_override = _zero_fit_shift
         pair_shift = (
             _shift_override
             if _shift_override is not None
@@ -1523,6 +1705,10 @@ def main() -> None:
         np.round(np.linspace(0, w_update.size - 1, n_sigma_omega)).astype(int)
     )
     w_eval = w_update[w_eval_indices]
+    if float(args.sigma_omega_dense_half_width) > 0.0:
+        dense = w_update[np.abs(w_update) <= float(args.sigma_omega_dense_half_width)]
+        dense = dense[:: max(1, int(args.sigma_omega_dense_stride))]
+        w_eval = np.unique(np.concatenate([w_eval, dense]))
     print(
         f"[density-clean] adaptive Sigma omega grid: {w_eval.size}/{w_update.size} nodes",
         flush=True,
@@ -1541,6 +1727,7 @@ def main() -> None:
             qff=pair_q_selected,
             sigma_nk=int(args.sigma_nk),
             sigma_k_feature_fraction=float(args.sigma_k_feature_fraction),
+            sigma_k_kf_offsets=tuple(float(x) for x in re.split(r"[,:]", str(args.sigma_k_kf_offsets)) if x.strip()),
             n_theta=int(args.n_theta),
             omega_chunk=int(args.omega_chunk),
             workers=int(args.workers),
@@ -1886,6 +2073,20 @@ def main() -> None:
                 )
             nk = occupied_nk(a, w)
             sums = row_sum_rule(a, w)
+            if args.density_fine_pole:
+                _kmax_fine = (float(k_update_max) if args.high_k_sigma_mode == "pair-contact"
+                              and np.isfinite(float(k_update_max)) else None)
+                nk = occupied_nk_fine(
+                    k, w, re_rows, im_rows, nk, mu=mu_external[spin], mass=mass,
+                    sigma0=float(sigma0), eta=eta, kmax=_kmax_fine,
+                )
+            elif args.density_pole_subtract and alpha is not None:
+                dn_pole, ds_pole = pole_quadrature_correction(
+                    k, w, re_rows, im_rows, mu=mu_external[spin], mass=mass,
+                    sigma0=float(sigma0), eta=eta,
+                )
+                nk = nk + dn_pole
+                sums = sums + ds_pole
             density_total, density_captured, density_tail, contact = density_with_contact_tail(
                 k, nk, bool(args.density_contact_tail),
                 contact_override=pair_contact,
@@ -2017,6 +2218,11 @@ def main() -> None:
         f"complete_internal_p_at_kmax {complete_internal_p:.12g}",
         f"omega_update {w_base[w_mask][0]:.12g} {w_base[w_mask][-1]:.12g}",
         f"sigma_nk {args.sigma_nk}",
+        f"sigma_omega_nodes {w_eval.size}",
+        f"sigma_omega_dense_half_width {args.sigma_omega_dense_half_width:.12g}",
+        f"sigma_omega_dense_stride {args.sigma_omega_dense_stride}",
+        f"sigma_k_kf_offsets {args.sigma_k_kf_offsets or 'none'}",
+        f"density_pole_subtract {int(bool(args.density_pole_subtract))}",
         f"sigma_k_feature_fraction {args.sigma_k_feature_fraction:.12g}",
         f"pole_refind_n_local {args.pole_refind_n_local}",
         f"sigma_p_int_max {sigma_p_int_max:.12g}",

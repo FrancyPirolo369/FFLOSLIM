@@ -202,6 +202,37 @@ def eval_translated_a_rows(
     flat_tk = tk_arr.ravel()
     flat_kin = kin_arr.ravel()
 
+    if os.environ.get("ADN_ROWLOCAL_LOOP", "0") != "1":
+        # 2026-10-02: same arithmetic as the per-point loop below, reorganised.  The query
+        # frequencies are shared by every point, so each cube row used is interpolated ONCE
+        # (np.interp at the same points gives the same bits) and the points are combined with
+        # vectorised weights.  Inside the joint support of the two bracketing rows the
+        # left/right=0 fill of np.interp never applies, exactly as in the loop.  ~10x faster on
+        # the production residual; ADN_ROWLOCAL_LOOP=1 restores the loop.
+        sel = np.flatnonzero(flat_kin)
+        if sel.size == 0:
+            return out, support
+        i0s = flat_ki0[sel]
+        i1s = flat_ki1[sel]
+        rows, inv = np.unique(np.concatenate([i0s, i1s]), return_inverse=True)
+        tab = np.empty((rows.size, n_wq), dtype=float)
+        lo_r = np.empty(rows.size, dtype=float)
+        hi_r = np.empty(rows.size, dtype=float)
+        for j, r in enumerate(rows):
+            tab[j] = np.interp(wf, w[r], a_vals[r], left=0.0, right=0.0)
+            lo_r[j] = float(w[r][0])
+            hi_r[j] = float(w[r][-1])
+        j0 = inv[: sel.size]
+        j1 = inv[sel.size:]
+        in_w = (wf[None, :] >= np.maximum(lo_r[j0], lo_r[j1])[:, None]) & (
+            wf[None, :] <= np.minimum(hi_r[j0], hi_r[j1])[:, None]
+        )
+        tkf = flat_tk[sel][:, None]
+        vals = (1.0 - tkf) * tab[j0] + tkf * tab[j1]
+        flat_out[sel] = np.where(in_w, vals, 0.0)
+        flat_support[sel] = in_w
+        return out, support
+
     for idx in range(flat_ki0.size):
         if not bool(flat_kin[idx]):
             continue
@@ -595,6 +626,42 @@ def _add_trapezoid_panel(nodes: list[float], weights: list[float], a: float, b: 
     weights.extend(w.tolist())
 
 
+def _add_graded_k_panel(nodes: list[float], weights: list[float], a: float, b: float,
+                        p: float, q: float, routing: str, features: list[float],
+                        dmin: float, n_side: int) -> None:
+    """Panel [a, b] in phi with nodes graded geometrically in the partner momentum k_-(phi)
+    toward every feature kF inside it; non-uniform trapezoid weights in phi (x2: 2 int_0^pi)."""
+    if b <= a + 1.0e-14:
+        return
+    pf, qf = float(p), float(q)
+    sign = 1.0 if str(routing).strip().lower() == "sum" else -1.0
+
+    def k_of(phi):
+        return np.sqrt(np.maximum(pf * pf + qf * qf + sign * 2.0 * pf * qf * np.cos(phi), 0.0))
+
+    k_a, k_b = sorted((float(k_of(a)), float(k_of(b))))
+    ks = [k_a, k_b]
+    for kf in features:
+        if not (k_a < kf < k_b):
+            continue
+        ks.append(kf)
+        for edge in (k_a, k_b):
+            span = abs(edge - kf)
+            if span > dmin:
+                d = np.geomspace(dmin, span, max(2, int(n_side)))
+                ks.extend((kf + np.sign(edge - kf) * d).tolist())
+    phis = np.unique(np.clip([_phi_from_partner_k(pf, qf, kv, routing) for kv in ks], a, b))
+    phis = np.unique(np.concatenate([[a], phis[np.isfinite(phis)], [b]]))
+    if phis.size < 2:
+        return
+    w = np.zeros_like(phis)
+    dphi = np.diff(phis)
+    w[:-1] += 0.5 * dphi
+    w[1:] += 0.5 * dphi
+    nodes.extend(phis.tolist())
+    weights.extend((2.0 * w).tolist())
+
+
 def _add_chebyshev_full_panel(nodes: list[float], weights: list[float], n: int) -> None:
     """Gauss-Chebyshev panel over the full [0, pi] range via phi = arccos(u).
 
@@ -627,6 +694,7 @@ def build_phipanel_geometry_cache(
     k_features: list[float] | None = None,
     k_feature_n_local: int = 31,
     k_feature_half_width: float = 0.05,
+    graded_min: float | None = None,
 ) -> tuple[list[tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]], float, int]:
     """Composite phi quadrature with local panels where k_-(phi) crosses kF.
 
@@ -649,6 +717,12 @@ def build_phipanel_geometry_cache(
         local_n += 1
     hw = max(float(k_feature_half_width), 0.0)
     features = [float(x) for x in (k_features or []) if np.isfinite(float(x))]
+    # PHIPANEL_GRADED_MIN (2026-10-02): feature panels graded geometrically in the partner momentum
+    # toward each kF (distances from this value to the window edge, local_n nodes per side) instead
+    # of a uniform trapezoid in phi.  Near the critical point the partner QP ridge is ~1e-3 wide in
+    # energy, against 0.005 x v_F for the 21 uniform nodes.  0 = off (production).
+    if graded_min is None:
+        graded_min = float(os.environ.get("PHIPANEL_GRADED_MIN", "0") or 0.0)
 
     per_p_nodes: list[np.ndarray] = []
     per_p_weights: list[np.ndarray] = []
@@ -704,7 +778,11 @@ def build_phipanel_geometry_cache(
                 cursor = 0.0
                 for a, b in feature_intervals:
                     _add_gauss_legendre_panel(nodes, weights, cursor, a, regular_n)
-                    _add_trapezoid_panel(nodes, weights, a, b, local_n)
+                    if graded_min > 0.0:
+                        _add_graded_k_panel(nodes, weights, a, b, pf, qf, routing, features,
+                                            graded_min, local_n)
+                    else:
+                        _add_trapezoid_panel(nodes, weights, a, b, local_n)
                     cursor = b
                 _add_gauss_legendre_panel(nodes, weights, cursor, np.pi, regular_n)
 
@@ -770,8 +848,15 @@ def precompute_kjac_integrated_slice(
     sigma0: float = 0.0,
     mu: float = 0.0,
     eta: float = 1.0e-3,
+    qp_model: tuple | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Return the transformed-geometry angular integral for one omega slice."""
+    """Return the transformed-geometry angular integral for one omega slice.
+
+    qp_model = (k, E, Z, G, gamma_floor) (2026-10-02): evaluate the QP Lorentzian
+    Z/pi G/((w - E)^2 + G^2), G >= gamma_floor, exactly at the partner momentum of every
+    angular node instead of interpolating a stored A0 cube bilinearly between k rows (two
+    rows bracket Lorentzians with different centres: the interpolant is a double peak, not
+    the Lorentzian at the intermediate k).  Used for the control line A0 of the residual."""
     n_p = p_grid.size
     n_eps = eps_grid.size
 
@@ -792,7 +877,20 @@ def precompute_kjac_integrated_slice(
     accum_support = np.zeros((n_p, n_eps), dtype=float)
 
     for ki0, ki1, tk3, kin3, quad_w in geom_chunks:
-        if re_sigma is None or im_sigma is None:
+        if qp_model is not None:
+            mk, mE, mZ, mG, gfloor = qp_model
+            tk = tk3[:, :, 0]
+            k_minus = (1.0 - tk) * k_axis[ki0] + tk * k_axis[ki1]
+            if os.environ.get("QP_E_INTERP_K2", "0").strip().lower() not in ("", "0", "false", "no"):
+                e_m = (np.interp(k_minus, mk, np.asarray(mE, float) - np.asarray(mk, float) ** 2)
+                       + k_minus ** 2)[:, :, None]   # E - k^2 lineare (vedi analytic_bubble._interp_e)
+            else:
+                e_m = np.interp(k_minus, mk, mE)[:, :, None]
+            z_m = np.interp(k_minus, mk, mZ)[:, :, None]
+            g_m = np.maximum(np.interp(k_minus, mk, mG), float(gfloor))[:, :, None]
+            interp = (z_m / np.pi) * g_m / ((wq[None, None, :] - e_m) ** 2 + g_m ** 2)
+            support = np.broadcast_to(kin3[:, :, 0][:, :, None], interp.shape)
+        elif re_sigma is None or im_sigma is None:
             interp, support = eval_translated_a_rows(
                 k_axis,
                 w_axis,

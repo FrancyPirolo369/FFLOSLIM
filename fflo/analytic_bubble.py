@@ -19,6 +19,8 @@ k-integral is smooth in q and P (no razor on a grid), and carries the -1/8
 vacuum tail to all omega by construction (no UV grid-starvation, no taper).
 """
 from __future__ import annotations
+import os
+
 import numpy as np
 from scipy.integrate import quad
 
@@ -33,13 +35,40 @@ def _interp(kq, k, v):
     return np.interp(np.clip(kq, k[0], k[-1]), k, v)
 
 
+
+# QP_E_INTERP_K2=1 (2026-10-05): l'energia del modello QP fra due righe si interpola come E - k^2 lineare piu' k^2
+# esatto.  Interpolare E linearmente in k sposta il picco di ~Dk^2/4 per la curvatura di k^2: oltre k_update_max
+# (righe rade, Dk 0.25-0.4, larghezza = eta = 1e-3) vuol dire 20-40 larghezze, e il controllo A0 smette di
+# cancellare il picco della A ricostruita da Sigma (rasoiate isolate nella parte a griglia).  Spento = storico.
+_E_K2 = os.environ.get("QP_E_INTERP_K2", "0").strip().lower() not in ("", "0", "false", "no")
+
+
+def _interp_e(x, k, E):
+    if _E_K2:
+        k = np.asarray(k, float)
+        return _interp(x, k, np.asarray(E, float) - k * k) + np.asarray(x, float) ** 2
+    return _interp(x, k, E)
+
+
 def _feature_grid(kmax, nk, features, half=0.25, n_local=240):
     """Uniform base grid plus dense clusters around each Fermi shell (where the
-    integrand is sharply peaked at small q -> the Cooper threshold)."""
+    integrand is sharply peaked at small q -> the Cooper threshold).
+
+    COHERENT_K_GRADED_MIN (2026-10-02): if > 0, each cluster is graded geometrically toward kF
+    (distances from this value to `half`, n_local/2 nodes per side) instead of uniform: the QP
+    ridge near the critical point is ~1e-3 wide in energy (~4e-4 in k) against the 2e-3 spacing
+    of the uniform cluster.  0 = off (production)."""
+    import os as _os
+    graded_min = float(_os.environ.get("COHERENT_K_GRADED_MIN", "0") or 0.0)
+    n_side = int(_os.environ.get("COHERENT_K_GRADED_N", "0") or 0) or max(2, n_local // 2)
     g = [np.linspace(0.0, kmax, nk)]
     for kf in features:
         if 0.0 < kf < kmax:
-            g.append(np.linspace(max(0.0, kf - half), min(kmax, kf + half), n_local))
+            if graded_min > 0.0:
+                d = np.geomspace(graded_min, half, n_side)
+                g.append(np.clip(np.concatenate([kf - d[::-1], [kf], kf + d]), 0.0, kmax))
+            else:
+                g.append(np.linspace(max(0.0, kf - half), min(kmax, kf + half), n_local))
     return np.unique(np.concatenate(g))
 
 
@@ -59,7 +88,7 @@ def coherent_impi(
     phi = np.linspace(0.0, np.pi, nphi)          # symmetric -> factor 2
     K, PH = np.meshgrid(kk, phi, indexing="ij")
     k2 = np.sqrt(np.maximum(K * K + q * q - 2.0 * K * q * np.cos(PH), 0.0))  # |q-k|
-    E1 = _interp(K, k_up, E_up); E2 = _interp(k2, k_dn, E_dn)
+    E1 = _interp_e(K, k_up, E_up); E2 = _interp_e(k2, k_dn, E_dn)
     Z1 = _interp(K, k_up, Z_up); Z2 = _interp(k2, k_dn, Z_dn)
     G1 = np.maximum(_interp(K, k_up, G_up), gamma_floor)
     # slight asymmetry on G2 avoids exact pole degeneracy in the residue formula
@@ -181,7 +210,11 @@ def _coherent_impi_from_geometry(
         tk = tk3[:, :, 0]
         kin = kin3[:, :, 0]
         angle_w = np.where(kin, quad_w[:, :, 0], 0.0)
-        E2 = (1.0 - tk) * E_dn[ki0] + tk * E_dn[ki1]
+        if _E_K2:
+            kq = (1.0 - tk) * k_dn[ki0] + tk * k_dn[ki1]
+            E2 = ((1.0 - tk) * (E_dn[ki0] - k_dn[ki0] ** 2) + tk * (E_dn[ki1] - k_dn[ki1] ** 2)) + kq * kq
+        else:
+            E2 = (1.0 - tk) * E_dn[ki0] + tk * E_dn[ki1]
         Z2 = (1.0 - tk) * Z_dn[ki0] + tk * Z_dn[ki1]
         G2 = np.maximum((1.0 - tk) * G_dn[ki0] + tk * G_dn[ki1], gamma_floor) * (1.0 + 1.0e-6)
         meas = pref_k * Z2 * angle_w
@@ -277,7 +310,7 @@ def coherent_impi_kjac(
     else:
         kk = np.linspace(0.0, kmax, nk)
 
-    E1_k = _interp(kk, k_up, E_up)
+    E1_k = _interp_e(kk, k_up, E_up)
     Z1_k = _interp(kk, k_up, Z_up)
     G1_k = np.maximum(_interp(kk, k_up, G_up), gamma_floor)
 
@@ -525,7 +558,7 @@ def coherent_impi_phipanel(
     else:
         kk = np.linspace(0.0, kmax, nk)
 
-    E1_k = _interp(kk, k_up, E_up)
+    E1_k = _interp_e(kk, k_up, E_up)
     Z1_k = _interp(kk, k_up, Z_up)
     G1_k = np.maximum(_interp(kk, k_up, G_up), gamma_floor)
 
@@ -538,6 +571,7 @@ def coherent_impi_phipanel(
         phi_panel_chunk_size=int(phi_panel_chunk_size),
         k_features=[float(x) for x in (kf_features or [])],
         k_feature_n_local=int(phi_feature_n_local),
+        graded_min=float(__import__("os").environ.get("COHERENT_PHI_GRADED_MIN", "0") or 0.0),
         k_feature_half_width=float(phi_feature_half_width),
     )
 

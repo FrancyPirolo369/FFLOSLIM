@@ -111,8 +111,10 @@ def qp_model_from_cube(src_path):
     }
 
 
-def _qp_rows(c, model):
-    """Evaluate the canonical QP Lorentzian on a cube's row-local axes."""
+def _qp_rows(c, model, gamma_floor=None):
+    """Evaluate the canonical QP Lorentzian on a cube's row-local axes.
+
+    gamma_floor: lower bound on the width (default: the cube eta, the historical choice)."""
     k = np.asarray(c["k"], float)
     if not np.array_equal(k, np.asarray(model["native_k"], float)):
         raise ValueError("QP model and cube k grids differ")
@@ -121,7 +123,8 @@ def _qp_rows(c, model):
     km = np.asarray(model["k"], float)
     E = np.interp(k, km, np.asarray(model["E"], float))
     Z = np.interp(k, km, np.asarray(model["Z"], float))
-    G = np.maximum(np.interp(k, km, np.asarray(model["G"], float)), float(model["eta"]))
+    floor = float(model["eta"]) if gamma_floor is None else float(gamma_floor)
+    G = np.maximum(np.interp(k, km, np.asarray(model["G"], float)), floor)
     out = np.zeros_like(np.asarray(c["A"], float))
     for ik in range(k.size):
         w = w2[ik] if w2 is not None else wb
@@ -129,10 +132,16 @@ def _qp_rows(c, model):
     return out
 
 
-def build_qp_cube(src_path, dst_path, *, model=None):
+def build_qp_cube(src_path, dst_path, *, model=None, gamma_floor=None):
     c = dict(np.load(src_path))
     model = qp_model_from_cube(src_path) if model is None else model
-    c["A"] = _qp_rows(c, model)
+    c["A"] = _qp_rows(c, model, gamma_floor)
+    # the model itself, so impi_table --control-analytic can evaluate A0 exactly (2026-10-02)
+    c["qp_model_k"] = np.asarray(model["k"], float)
+    c["qp_model_E"] = np.asarray(model["E"], float)
+    c["qp_model_Z"] = np.asarray(model["Z"], float)
+    c["qp_model_G"] = np.asarray(model["G"], float)
+    c["qp_model_floor"] = np.array(float(model["eta"]) if gamma_floor is None else float(gamma_floor))
     np.savez(dst_path, **c)
     return (
         int(np.count_nonzero(model["valid_native"])),

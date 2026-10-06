@@ -339,8 +339,29 @@ def parse_args() -> argparse.Namespace:
         help="If finite with --residual-omega-taper-start, force DeltaImPi_res to zero for |omega| >= stop.",
     )
     p.add_argument(
+        "--residual-qmax-lambda", type=float, default=0.0,
+        help="righe con Q >= F * Lambda (Lambda = p_cutoff della bolla numerica) usano solo Gamma0: residuo "
+             "numerico a zero.  La bolla con |p| <= Lambda non ha supporto completo per Q >= 2 Lambda; con qcut "
+             "a P = 0.80 quelle righe hanno sviluppato ImGamma^-1 spurio a Omega ~ 0 (peso di coppia occupato a "
+             "Q >= 8 dallo 0.16 al 34%% in tre iterazioni).  0 = spento (2026-10-04)",
+    )
+    p.add_argument(
+        "--residual-taper-qfreeze", type=float, default=0.0,
+        help="taper qkin: per Q < F qff (qff = sqrt(mu_up) - sqrt(mu_dn)) usa il taper della riga F qff invece "
+             "di quello mobile (inizio a (Q + kF_up)^2 - mu_dn).  Il taper mobile taglia il residuo, grande ad "
+             "alta P, in modo diverso riga per riga: a P = 0.85 sposta la gara Q ~ 0 / qff di ~4.5 delta (decide "
+             "il ramo).  0 = mobile (produzione); 1 = righe candidate [0, qff] con lo stesso taper, riga qff "
+             "invariata (2026-10-03)",
+    )
+    p.add_argument(
+        "--ref-kk-fine-step", type=float, default=0.0,
+        help="proxy_residual: rifa' la KK della parte di riferimento (analitica) su una griglia fine con "
+             "questo passo attorno ai suoi bordi (Pauli, soglia), invece che sulla griglia Omega nativa.  "
+             "0 = spento (produzione).  2.5e-4 toglie le oscillazioni di ReGamma^-1 a Q piccolo (2026-10-03)",
+    )
+    p.add_argument(
         "--residual-omega-taper-mode",
-        choices=("cosine", "hard", "none", "qkin_cosine", "qkin_hard"),
+        choices=("cosine", "hard", "none", "qkin_cosine", "qkin_hard", "qcut_cosine"),
         default="cosine",
         help=(
             "Residual tail taper shape. none disables tapering. qkin_* tapers only positive omega "
@@ -525,6 +546,25 @@ def build_residual_omega_taper(
     return weights, mode_l, start_abs, stop_abs
 
 
+# Lambda della bolla numerica (p_cutoff della tabella ImPi), letto da main(): serve al taper qcut
+_TAPER_P_CUT = 4.0
+
+
+def _qcut_end(q, mu_up: float, mu_dn: float, width: float):
+    """Fine del taper qcut: dove la bolla numerica smette di essere affidabile, ma mai prima del vecchio
+    taper qkin (e2(Q) + width, e2 = (Q + kF_up)^2 - mu_dn = ultimo bordo di Pauli di Gamma0): il continuo
+    oltre e2 resta sempre intero.  La bolla numerica taglia |p| <= Lambda su UNA particella: perde meta'
+    della shell di energia a circa Q^2 + 2 Lambda^2 - mu_up - mu_dn (tabella P0p50 it8: crollo a meta' a
+    Omega ~ 30 per Q <= 2, 48 a Q = 4, 114 a Q = 8); fine = quel valore - 5 (2026-10-04, corretto: la prima
+    versione usava la shell completa, Q^2/2 + 2 (Lambda - Q/2)^2, che a Q >~ 1.5 tagliava il continuo)."""
+    q = np.asarray(q, dtype=float)
+    kf_up = np.sqrt(max(float(mu_up), 0.0))
+    starve = q ** 2 - float(mu_up) - float(mu_dn) + 2.0 * _TAPER_P_CUT ** 2 - 5.0
+    # mai prima della fine del vecchio qkin (e2 + 20): con la sfumatura larga width <= 20, w_qcut >= w_qkin
+    # a ogni (Q, Omega), cioe' qcut tiene sempre almeno tanto residuo (continuo) quanto qkin
+    return np.maximum(starve, (q + kf_up) ** 2 - float(mu_dn) + max(20.0, float(width)))
+
+
 def build_residual_qkin_taper(
     q_grid: np.ndarray,
     omega_grid: np.ndarray,
@@ -543,7 +583,7 @@ def build_residual_qkin_taper(
     q = np.asarray(q_grid, dtype=float)
     w = np.asarray(omega_grid, dtype=float)
     mode_l = str(mode).strip().lower()
-    if not mode_l.startswith("qkin_"):
+    if not mode_l.startswith(("qkin_", "qcut_")):
         raise ValueError(f"Unsupported q-kinematic taper mode: {mode!r}")
 
     offset = 0.0 if not np.isfinite(float(start_offset)) else float(start_offset)
@@ -552,13 +592,20 @@ def build_residual_qkin_taper(
         raise ValueError(f"qkin taper width must be positive, got {taper_width:.6g}.")
 
     kf_up = float(np.sqrt(max(float(mu_up), 0.0)))
-    threshold = (q[:, None] + kf_up) ** 2 - float(mu_dn) + offset
+    # forma (hard/cosine) separata dal nome del modo: il nome torna al chiamante e decide il taper della KK
+    # (kk_on_tapered_residual_native), quindi NON va riscritto (bug 2026-10-04: qcut diventava qkin nella KK)
+    shape_l = mode_l.replace("qcut_", "qkin_")
+    if mode_l.startswith("qcut_"):
+        # qcut: residuo intero fino a Omega_end(Q) - width, sfumato a zero in Omega_end(Q)
+        threshold = _qcut_end(q, mu_up, mu_dn, taper_width)[:, None] - taper_width + offset
+    else:
+        threshold = (q[:, None] + kf_up) ** 2 - float(mu_dn) + offset
     x = (w[None, :] - threshold) / taper_width
     weights = np.ones((q.size, w.size), dtype=float)
 
-    if mode_l == "qkin_hard":
+    if shape_l == "qkin_hard":
         weights = np.where(x > 0.0, 0.0, 1.0)
-    elif mode_l == "qkin_cosine":
+    elif shape_l == "qkin_cosine":
         weights[x >= 1.0] = 0.0
         mask = (x > 0.0) & (x < 1.0)
         weights[mask] = 0.5 * (1.0 + np.cos(np.pi * x[mask]))
@@ -584,10 +631,14 @@ def _taper_weight_on_grid(
     if mode_l == "none":
         return np.ones_like(w, dtype=float)
 
-    if mode_l.startswith("qkin_"):
+    if mode_l.startswith(("qkin_", "qcut_")):
         kf_up = float(np.sqrt(max(float(mu_up), 0.0)))
-        threshold = (float(q_value) + kf_up) ** 2 - float(mu_dn) + float(start)
         width = float(stop)
+        if mode_l.startswith("qcut_"):
+            threshold = float(_qcut_end(float(q_value), mu_up, mu_dn, width)) - width + float(start)
+            mode_l = mode_l.replace("qcut_", "qkin_")
+        else:
+            threshold = (float(q_value) + kf_up) ** 2 - float(mu_dn) + float(start)
         x = (w - threshold) / width
         if mode_l == "qkin_hard":
             return np.where(x > 0.0, 0.0, 1.0)
@@ -627,15 +678,96 @@ def _taper_breakpoints(
     mode_l = str(mode).strip().lower()
     if mode_l == "none":
         return []
-    if mode_l.startswith("qkin_"):
+    if mode_l.startswith(("qkin_", "qcut_")):
         kf_up = float(np.sqrt(max(float(mu_up), 0.0)))
-        threshold = (float(q_value) + kf_up) ** 2 - float(mu_dn) + float(start)
+        if mode_l.startswith("qcut_"):
+            threshold = float(_qcut_end(float(q_value), mu_up, mu_dn, float(stop))) - float(stop) + float(start)
+        else:
+            threshold = (float(q_value) + kf_up) ** 2 - float(mu_dn) + float(start)
         return [threshold, threshold + float(stop)]
     if np.isfinite(float(start)) and np.isfinite(float(stop)):
         start_abs = float(abs(start))
         stop_abs = float(abs(stop))
         return [-stop_abs, -start_abs, start_abs, stop_abs]
     return []
+
+
+def kk_pv_linear_at(x: np.ndarray, f: np.ndarray, targets: np.ndarray, chunk: int = 128) -> np.ndarray:
+    """(1/pi) PV int f(x')/(x' - t) dx' per f lineare a tratti sui nodi x, nei punti t (2026-10-03).
+
+    Per ogni t si sottrae f(t) (g = f - f(t) si annulla in t, g/(x'-t) e' regolare), si integra cella per
+    cella in forma chiusa e si aggiunge f(t) ln((x_max - t)/(t - x_min)).  Stessa convenzione di
+    kk_re_pv_linear, ma i punti di valutazione possono essere diversi dai nodi."""
+    x = np.asarray(x, dtype=float)
+    f = np.asarray(f, dtype=float)
+    t_all = np.asarray(targets, dtype=float)
+    out = np.empty(t_all.size, dtype=float)
+    a0, b0 = x[:-1], x[1:]
+    for j0 in range(0, t_all.size, chunk):
+        t = t_all[j0:j0 + chunk][:, None]
+        ft = np.interp(t[:, 0], x, f)[:, None]
+        ga = f[:-1][None, :] - ft
+        gb = f[1:][None, :] - ft
+        s = (gb - ga) / (b0 - a0)[None, :]
+        a = a0[None, :] - t
+        b = b0[None, :] - t
+        same = ((a > 0) & (b > 0)) | ((a < 0) & (b < 0))
+        safe_a = np.where(same, a, 1.0)
+        safe_b = np.where(same, b, 1.0)
+        val = np.where(same, (ga - s * a) * np.log(np.abs(safe_b / safe_a)) + s * (b - a), s * (b - a))
+        tt = t[:, 0]
+        with np.errstate(divide="ignore", invalid="ignore"):
+            edge = ft[:, 0] * np.log((x[-1] - tt) / (tt - x[0]))
+        edge = np.where(np.isfinite(edge), edge, 0.0)
+        out[j0:j0 + chunk] = (val.sum(axis=1) + edge) / np.pi
+    return out
+
+
+def reference_edges(q_value: float, mu_up: float, mu_dn: float) -> list[float]:
+    """Bordi netti di ImPi_ref(Q, Omega) (eps_k = k^2): soglia Q^2/2 - mu_up - mu_dn e bordi di Pauli
+    (Q -+ kF_up)^2 - mu_dn, (Q -+ kF_dn)^2 - mu_up (dove una delle due particelle tocca la sua superficie
+    di Fermi).  Verificati sul riferimento analitico a P = 0.85, Q = 0 / 0.5 / 2 (2026-10-03)."""
+    q = float(q_value)
+    out = [0.5 * q * q - float(mu_up) - float(mu_dn)]
+    for kf, mu_other in ((np.sqrt(max(float(mu_up), 0.0)), float(mu_dn)),
+                         (np.sqrt(max(float(mu_dn), 0.0)), float(mu_up))):
+        if kf > 0.0:
+            out += [(q - kf) ** 2 - mu_other, (q + kf) ** 2 - mu_other]
+    return out
+
+
+def reference_kk_fine_correction(
+    omega: np.ndarray, im_ref_native: np.ndarray, *, q_value: float, eps0: float, mu_up: float,
+    mu_dn: float, eta_gamma: float, cutoff: float, taper_mode: str, taper_start: float,
+    taper_stop: float, step: float, half_width: float = 0.1, taper_q: float | None = None,
+) -> np.ndarray:
+    """KK_native[ImPi_ref w] - KK_fine[ImPi_ref w] sulla griglia nativa (2026-10-03).
+
+    Nel residuo proxy_residual la parte di riferimento (T-matrice libera analitica a omega + i eta) ha bordi
+    di Pauli e soglia larghi ~eta, che la griglia Omega non risolve: la sua KK numerica sbaglia di ~delta e
+    l'errore cambia con Q mentre i bordi scorrono fra i nodi (oscillazioni di ReGamma^-1 a Q piccolo, gara
+    qff / Q ~ 0 ad alta P).  La parte reale del riferimento entra esatta, quindi va esatta anche la sua KK.
+    Sulla griglia xf = nativa + blocchi di passo `step` larghi +-half_width attorno ai bordi, la differenza
+    d = (riferimento interpolato linearmente dai nodi nativi, cioe' la funzione che la KK nativa integra)
+    - (riferimento analitico) e' diversa da zero solo nei blocchi: la correzione e' KK_xf[d].
+    delta_re corretto = delta_re + questa correzione (ReGamma^-1 corretto = ReGamma^-1 - correzione)."""
+    omega = np.asarray(omega, dtype=float)
+    qt = float(q_value) if taper_q is None else float(taper_q)
+    kw = dict(mode=taper_mode, start=float(taper_start), stop=float(taper_stop), mu_up=float(mu_up),
+              mu_dn=float(mu_dn))
+    extra = [float(x) for x in _taper_breakpoints(qt, **kw) if float(omega[0]) < float(x) < float(omega[-1])]
+    xn = np.unique(np.concatenate([omega, np.asarray(extra, dtype=float)]))
+    fn = np.interp(xn, omega, np.asarray(im_ref_native, dtype=float)) * _taper_weight_on_grid(qt, xn, **kw)
+    blocks = []
+    for e in reference_edges(float(q_value), float(mu_up), float(mu_dn)):
+        b = np.arange(e - half_width, e + half_width + 0.5 * step, step)
+        blocks.append(b[(b > xn[0]) & (b < xn[-1])])
+    xf = np.unique(np.concatenate([xn] + blocks))
+    ff = np.imag(proxy_full_pi_from_gamma(xf, q=float(q_value), eps0=float(eps0), mu_up=float(mu_up),
+                                          mu_dn=float(mu_dn), eta_gamma=float(eta_gamma), cutoff=float(cutoff)))
+    d = np.interp(xf, xn, fn) - ff * _taper_weight_on_grid(qt, xf, **kw)
+    d[np.isin(xf, omega)] = 0.0       # sui nodi nativi le due coincidono (stesso Pi_ref): zero esatto
+    return kk_pv_linear_at(xf, d, omega)
 
 
 def kk_on_tapered_residual_native(
@@ -777,9 +909,15 @@ def main() -> None:
     )
     kk_effective_mode = "native_pv" if kk_tail_alpha_used is None else "padded_optional_tail"
     taper_mode_req = str(args.residual_omega_taper_mode).strip().lower()
-    if taper_mode_req.startswith("qkin_"):
+    taper_q_freeze = float(args.residual_taper_qfreeze) * (
+        float(np.sqrt(max(float(mu_up), 0.0))) - float(np.sqrt(max(float(mu_dn), 0.0))))
+    # q usata dal taper, riga per riga (= q se il congelamento e' spento)
+    q_taper = np.maximum(np.asarray(q_grid, dtype=float), max(taper_q_freeze, 0.0))
+    global _TAPER_P_CUT
+    _TAPER_P_CUT = float(p_cutoff)
+    if taper_mode_req.startswith(("qkin_", "qcut_")):
         residual_taper_weight, residual_taper_mode_used, residual_taper_start, residual_taper_stop = build_residual_qkin_taper(
-            q_grid,
+            q_taper,
             omega_grid,
             mu_up=float(mu_up),
             mu_dn=float(mu_dn),
@@ -869,10 +1007,23 @@ def main() -> None:
         f"min_weight={float(np.min(residual_taper_weight)):.3g}"
     )
     print(f"[info] reference  : {reference_mode_used} (eta_gamma={eta_gamma_used:.6g})")
+    if float(args.ref_kk_fine_step) > 0.0:
+        print(f"[info] ref KK fine: passo {float(args.ref_kk_fine_step):.3g} attorno ai bordi del riferimento")
+    if float(args.residual_qmax_lambda) > 0.0:
+        print(f"[info] UV guard : righe con Q >= {float(args.residual_qmax_lambda) * float(p_cutoff):.6g} usano Gamma0")
+    if taper_q_freeze > 0.0:
+        print(f"[info] taper   : congelato per Q < {taper_q_freeze:.6g} ({float(args.residual_taper_qfreeze):g} qff)")
     if reference_mode_used == "qp_subtracted":
         print(f"[info] qp residual: mode={qp_residual_mode_used}, qpqp_source={qpqp_source_used}")
 
     im_pi_qpqp_table = np.zeros_like(im_pi_num)  # filled only in qp_subtracted mode
+    ref_kk_fine_on = float(args.ref_kk_fine_step) > 0.0 and reference_mode_used == "proxy_residual"
+    if float(args.ref_kk_fine_step) > 0.0 and not ref_kk_fine_on:
+        print(f"[warn] --ref-kk-fine-step ignorato: reference {reference_mode_used} (vale solo per proxy_residual)")
+    if ref_kk_fine_on and not (kk_max_n is None and float(args.kk_pad) == 0.0 and kk_tail_alpha_used is None):
+        print("[warn] --ref-kk-fine-step ignorato: vale solo con la KK nativa (kk_max_n/kk_pad/kk_tail_alpha spenti)")
+    ref_kk_fine_table = np.zeros_like(im_pi_num)  # correzione applicata a ReDeltaPiResidual (0 se spenta)
+    n_uv_guard = 0
 
     for iq, qv in enumerate(q_grid):
         residual_taper_weight_i = (
@@ -981,7 +1132,7 @@ def main() -> None:
                 delta_re_i = kk_on_tapered_residual_native(
                     omega_grid,
                     delta_im_i_raw,
-                    q_value=float(qv),
+                    q_value=float(q_taper[iq]),
                     taper_mode=residual_taper_mode_used,
                     taper_start=float(residual_taper_start),
                     taper_stop=float(residual_taper_stop),
@@ -1005,18 +1156,34 @@ def main() -> None:
         else:  # proxy_residual
             inv_gamma_ref_i = inv_gamma_ref_proxy_i
             delta_im_i_raw = np.asarray(im_pi_num[iq], dtype=float) - np.imag(pi_ref_i)
+            uv_guarded_i = (float(args.residual_qmax_lambda) > 0.0
+                            and float(qv) >= float(args.residual_qmax_lambda) * float(p_cutoff))
+            if uv_guarded_i:
+                # fuori dal supporto della bolla numerica: Gamma = Gamma0 (residuo nullo, KK nulla)
+                delta_im_i_raw = np.zeros_like(delta_im_i_raw)
+                n_uv_guard += 1
             delta_im_i = delta_im_i_raw * residual_taper_weight_i
             if kk_max_n is None and float(args.kk_pad) == 0.0 and kk_tail_alpha_used is None:
                 delta_re_i = kk_on_tapered_residual_native(
                     omega_grid,
                     delta_im_i_raw,
-                    q_value=float(qv),
+                    q_value=float(q_taper[iq]),
                     taper_mode=residual_taper_mode_used,
                     taper_start=float(residual_taper_start),
                     taper_stop=float(residual_taper_stop),
                     mu_up=float(mu_up),
                     mu_dn=float(mu_dn),
                 )
+                if ref_kk_fine_on and not uv_guarded_i:
+                    corr_i = reference_kk_fine_correction(
+                        omega_grid, np.imag(pi_ref_i), q_value=float(qv), eps0=float(eps0),
+                        mu_up=float(mu_up), mu_dn=float(mu_dn), eta_gamma=float(eta_gamma_used),
+                        cutoff=float(p_cutoff), taper_mode=residual_taper_mode_used,
+                        taper_start=float(residual_taper_start), taper_stop=float(residual_taper_stop),
+                        step=float(args.ref_kk_fine_step), taper_q=float(q_taper[iq]),
+                    )
+                    ref_kk_fine_table[iq] = corr_i
+                    delta_re_i = delta_re_i + corr_i
             else:
                 delta_re_i = kk_on_residual(
                     omega_grid,
@@ -1095,6 +1262,12 @@ def main() -> None:
         ReDeltaPiResidual=re_delta_pi_res.astype(np.float64),
         ImDeltaPiResidual=im_delta_pi_res.astype(np.float64),
         ImDeltaPiResidualRaw=im_delta_pi_res_raw.astype(np.float64),
+        ReDeltaPiRefKKFine=ref_kk_fine_table.astype(np.float64),
+        ref_kk_fine_step=np.array(float(args.ref_kk_fine_step) if ref_kk_fine_on else 0.0, dtype=np.float64),
+        residual_taper_qfreeze=np.array(float(args.residual_taper_qfreeze), dtype=np.float64),
+        residual_taper_q=q_taper.astype(np.float64),
+        residual_qmax_lambda=np.array(float(args.residual_qmax_lambda), dtype=np.float64),
+        n_uv_guard_rows=np.array(int(n_uv_guard), dtype=np.int64),
         ReInvGammaReference=re_inv_gamma_ref.astype(np.float64),
         ImInvGammaReference=im_inv_gamma_ref.astype(np.float64),
         ReInvGamma=re_inv_gamma.astype(np.float64),

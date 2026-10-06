@@ -73,6 +73,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--p-nodes", type=int, default=0)
     parser.add_argument("--p-feature-width", type=float, default=float("nan"))
     parser.add_argument("--p-feature-nodes", type=int, default=-1)
+    parser.add_argument("--p-feature-mode", choices=("kf_only", "kf_and_shells"), default="kf_and_shells",
+                        help="impi_table --p-feature-mode.  kf_only: windows only at kF_up and kF_dn "
+                             "(the residual A*A - A0*A0 has a narrow well at p = kF_up, independent of Q: "
+                             "31 uniform nodes miss it and bias -ImPi(qff, |Omega| < 0.01) by 2-3x, "
+                             "2026-10-02); kf_and_shells also adds |Q +- kF| for 3 representative Q")
     parser.add_argument("--angular-nodes", type=int, default=0)
     parser.add_argument("--angular-feature-nodes", type=int, default=-1)
     parser.add_argument("--coherent-nk", type=int, default=0)
@@ -98,6 +103,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--q-local-center", type=float, default=float("nan"))
     parser.add_argument("--q-local-half-width", type=float, default=0.0)
     parser.add_argument("--q-local-dq", type=float, default=0.0)
+    parser.add_argument("--eps-window-only", action="store_true",
+                        help="impi_table --eps-window-only: residual only on the eps nodes of the T = 0 "
+                             "window [0, Omega]; same ImPi, ~2.5x less work")
     parser.add_argument("--eps-union-core", type=float, default=0.0,
                         help="PROD_UNION: nodi in eps del reticolo spostati su eps = Omega "
                              "(vedi impi_table --eps-union-core); 0 = spento")
@@ -123,6 +131,31 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--old-pair", type=Path, default=DEFAULT_OLD_PAIR)
     parser.add_argument("--skip-pair", action="store_true")
+    parser.add_argument("--coherent-kmax", type=float, default=0.0,
+                        help="taglio in impulso della parte coerente analitica A0*A0 (0 = Lambda della bolla, "
+                             "come prima).  Con --control-analytic la parte su griglia A*A - A0*A0 e' piccola e "
+                             "puo' restare a Lambda, mentre A0*A0 (forma chiusa) si estende fino al k massimo "
+                             "delle cube: il residuo rispetto al riferimento libero si annulla da solo ad alta "
+                             "Omega e il taper non serve piu' (2026-10-05)")
+    parser.add_argument("--control-analytic", action="store_true",
+                        help="impi_table --control-analytic: A0 del residuo calcolato esattamente dal modello "
+                             "QP invece che interpolato fra le righe della cube A0 (2026-10-02)")
+    parser.add_argument("--coherent-angle-mode", choices=("kjac", "phipanel"), default="kjac",
+                        help="quadratura angolare della parte coerente analitica: kjac (Chebyshev, i nodi "
+                             "attorno a kF NON sono applicati) o phipanel (pannelli con finestra a kF, "
+                             "graduata se PHIPANEL_GRADED_MIN > 0) (2026-10-02)")
+    parser.add_argument("--residual-qmax-lambda", type=float, default=0.0,
+                        help="pair_gamma --residual-qmax-lambda: righe con Q >= F Lambda usano solo Gamma0 (0 = spento)")
+    parser.add_argument("--residual-taper-qfreeze", type=float, default=0.0,
+                        help="pair_gamma --residual-taper-qfreeze: per Q < F qff il taper del residuo e' quello "
+                             "della riga F qff (0 = mobile, produzione) (2026-10-03)")
+    parser.add_argument("--ref-kk-fine-step", type=float, default=0.0,
+                        help="pair_gamma --ref-kk-fine-step: KK della parte di riferimento analitica su griglia "
+                             "fine attorno ai suoi bordi (0 = spento; 2.5e-4 toglie le oscillazioni di "
+                             "ReGamma^-1 a Q piccolo) (2026-10-03)")
+    parser.add_argument("--qp-gamma-floor", type=float, default=float("nan"),
+                        help="pavimento della larghezza QP, UNICO per la cube A0 del residuo e per la parte "
+                             "coerente analitica (nan = storico: eta della cube per A0, 1e-3 per l'analitica)")
     parser.add_argument(
         "--reference-mode",
         choices=("auto", "proxy_residual", "lorentzian_fixed_point",
@@ -200,8 +233,9 @@ def main() -> None:
         control_dir.mkdir(exist_ok=True)
         model_up = qp_model_from_cube(up)
         model_down = qp_model_from_cube(down)
-        build_qp_cube(up, qp_up, model=model_up)
-        build_qp_cube(down, qp_down, model=model_down)
+        qp_floor = None if not np.isfinite(float(args.qp_gamma_floor)) else float(args.qp_gamma_floor)
+        build_qp_cube(up, qp_up, model=model_up, gamma_floor=qp_floor)
+        build_qp_cube(down, qp_down, model=model_down, gamma_floor=qp_floor)
 
     with np.load(up) as z:
         mu_up_cube = float(z["mu_up"])
@@ -338,7 +372,7 @@ def main() -> None:
             "--p-int-max", f"{float(args.bubble_p_int_max):.15g}",
             "--n-p-int", p_nodes,
             "--p-grid-mode", "linear", "--p-feature-half-width", p_feature_width,
-            "--p-feature-n-local", p_feature_nodes, "--p-feature-mode", "kf_and_shells",
+            "--p-feature-n-local", p_feature_nodes, "--p-feature-mode", str(args.p_feature_mode),
             "--kf-feature-source", str(args.kf_feature_source),
             "--p-feature-q-min", "0.2", "--p-feature-q-max", "2.1",
             "--p-feature-q-max-points", "3",
@@ -361,6 +395,10 @@ def main() -> None:
             ]
         if float(args.eps_union_core) > 0.0:
             command += ["--eps-union-core", f"{float(args.eps_union_core):.15g}"]
+        if args.eps_window_only:
+            command += ["--eps-window-only"]
+        if args.control_analytic:
+            command += ["--control-analytic"]
         env = dict(os.environ)
         env.update(
             IMPI_INTERNAL_REBUILD="1",
@@ -383,13 +421,18 @@ def main() -> None:
         kd, ed, zd, gd, mu_down = _canonical_qp_fields(down, model_down)
         features = [_kf(ku, eu, mu_up), _kf(kd, ed, mu_down)]
         options = dict(
-            angle_mode="kjac",
+            angle_mode=str(args.coherent_angle_mode),
+            n_phi_panel=int(os.environ.get("COHERENT_PHI_PANELS", "24")),
+            phi_panel_chunk_size=8,
+            phi_feature_half_width=0.08,
+            phi_feature_n_local=int(os.environ.get("COHERENT_PHI_FEATURE_N", "21")),
             nk=coherent_nk,
             nphi=64,
             n_kquad=coherent_nquad,
             kquad_chunk_size=8,
-            kmax=float(result["p_int_max"]),
-            gamma_floor=1.0e-3,
+            kmax=(float(args.coherent_kmax) if float(args.coherent_kmax) > 0.0 else float(result["p_int_max"])),
+            gamma_floor=(1.0e-3 if not np.isfinite(float(args.qp_gamma_floor))
+                         else float(args.qp_gamma_floor)),
         )
         with ProcessPoolExecutor(
             max_workers=min(workers, q.size),
@@ -436,6 +479,12 @@ def main() -> None:
             "--residual-omega-taper-mode", "qkin_cosine",
             "--out-dir", str(pair_dir),
         ]
+        if float(args.ref_kk_fine_step) > 0.0:
+            command += ["--ref-kk-fine-step", f"{float(args.ref_kk_fine_step):.15g}"]
+        if float(args.residual_taper_qfreeze) > 0.0:
+            command += ["--residual-taper-qfreeze", f"{float(args.residual_taper_qfreeze):.15g}"]
+        if float(args.residual_qmax_lambda) > 0.0:
+            command += ["--residual-qmax-lambda", f"{float(args.residual_qmax_lambda):.15g}"]
         run(command, log=out / "pair.log")
 
     formula = (
@@ -451,7 +500,12 @@ def main() -> None:
         f"q_table_max={q_table_max:.12g}",
         f"workers={workers}",
         f"eps_union_core={float(args.eps_union_core):g}",
+        f"eps_window_only={int(bool(args.eps_window_only))}",
+        f"control_analytic={int(bool(args.control_analytic))} qp_gamma_floor={float(args.qp_gamma_floor):g} "
+        f"coherent_angle_mode={args.coherent_angle_mode} ref_kk_fine_step={float(args.ref_kk_fine_step):g} "
+        f"residual_taper_qfreeze={float(args.residual_taper_qfreeze):g}",
         f"lattice_dw={float(args.lattice_dw):g}",
+        f"p_feature={p_feature_width}/{p_feature_nodes}/{args.p_feature_mode}",
         f"profile={args.profile}",
         f"kf_feature_source={args.kf_feature_source}",
         f"formula={formula}",

@@ -74,36 +74,59 @@ def _compute_inline_control_scan(
     p_integration_mode: str,
     p_split_points: np.ndarray | None,
     p_gl_n: int,
+    eps_window_only: bool = False,
 ) -> tuple[dict[str, np.ndarray], float]:
-    """Integrate A*A - A0*A0 on one shared quadrature grid."""
+    """Integrate A*A - A0*A0 on one shared quadrature grid.
+
+    eps_window_only (2026-10-02): at T = 0 the thermal kernel f(eps) + f(Omega - eps) - 1 vanishes
+    outside the window between 0 and Omega, and ImPi (= the thermal piece) is all pair_gamma reads.
+    Only the eps nodes inside the window plus one neighbour on each side are then evaluated (the
+    neighbours keep the anchor interpolation at 0 and Omega, and therefore the thermal result,
+    unchanged): ~39% of the eps work on the production lattice.  The medium and no-thermal pieces
+    need the full grid and are returned as NaN in this mode."""
     omega = np.asarray(omega_grid, dtype=float)
-    ones = np.ones_like(np.asarray(aup_grid, dtype=float))
+    eps_grid = np.asarray(eps_grid, dtype=float)
+    aup_full = np.asarray(aup_grid, dtype=float)
+    cup_full = np.asarray(control_up_grid, dtype=float)
     thermal_raw = np.zeros(omega.size, dtype=float)
     no_thermal_raw = np.zeros(omega.size, dtype=float)
     medium_raw = np.zeros(omega.size, dtype=float)
     support_accum = 0.0
 
     for io, omega_value in enumerate(omega):
-        full_down, full_support = full_slice_provider(int(io), float(omega_value))
-        control_down, _ = control_slice_provider(int(io), float(omega_value))
+        if eps_window_only:
+            lo, hi = min(0.0, float(omega_value)), max(0.0, float(omega_value))
+            j0 = max(0, int(np.searchsorted(eps_grid, lo, side="left")) - 1)
+            j1 = min(eps_grid.size, int(np.searchsorted(eps_grid, hi, side="right")) + 1)
+            eps_use = eps_grid[j0:j1]
+            full_down, full_support = full_slice_provider(int(io), float(omega_value), eps_use)
+            control_down, _ = control_slice_provider(int(io), float(omega_value), eps_use)
+            aup_use, cup_use = aup_full[:, j0:j1], cup_full[:, j0:j1]
+        else:
+            eps_use = eps_grid
+            full_down, full_support = full_slice_provider(int(io), float(omega_value))
+            control_down, _ = control_slice_provider(int(io), float(omega_value))
+            aup_use, cup_use = aup_full, cup_full
         product_residual = (
-            np.asarray(aup_grid, dtype=float) * np.asarray(full_down, dtype=float)
-            - np.asarray(control_up_grid, dtype=float)
-            * np.asarray(control_down, dtype=float)
+            aup_use * np.asarray(full_down, dtype=float)
+            - cup_use * np.asarray(control_down, dtype=float)
         )
         support_accum += float(np.mean(np.asarray(full_support, dtype=float)))
         values = compute_impi_raw_totals_for_slice(
             float(omega_value),
             p_grid,
-            eps_grid,
+            eps_use,
             product_residual,
-            ones,
+            np.ones_like(product_residual),
             eps_integration_mode=eps_integration_mode,
             p_integration_mode=p_integration_mode,
             p_split_points=p_split_points,
             p_gl_n=int(p_gl_n),
         )
         thermal_raw[io], no_thermal_raw[io], medium_raw[io] = values
+        if eps_window_only:
+            no_thermal_raw[io] = np.nan
+            medium_raw[io] = np.nan
 
     return (
         finalize_impi_scan(
@@ -338,6 +361,7 @@ def _impi_process_worker(task: tuple[int, float]) -> tuple[int, float, np.ndarra
                 n_kquad=int(ctx["n_kquad"]),
                 kquad_chunk_size=int(ctx["kquad_chunk_size"]),
                 geom_cache=geom_cache,
+                qp_model=ctx.get("control_qp_dn", None),
             )
 
         _p_int_mode = str(ctx.get("p_integration_mode", "plain"))
@@ -388,6 +412,7 @@ def _impi_process_worker(task: tuple[int, float]) -> tuple[int, float, np.ndarra
                 p_integration_mode=_p_int_mode,
                 p_split_points=_p_split,
                 p_gl_n=_p_gl_n,
+                eps_window_only=bool(ctx.get("eps_window_only", False)),
             )
         else:
             scan, support_mean_i = compute_impi_scan_from_slice_provider(
@@ -711,6 +736,23 @@ def parse_args() -> argparse.Namespace:
              "due nodi vicini all'estremo mobile.  0 = spento.  Richiede --eps-grid-mode "
              "lattice, sottrazione inline e --parallel-mode processes.",
     )
+    p.add_argument(
+        "--eps-window-only",
+        action="store_true",
+        help="Evaluate the inline-control residual only on the eps nodes of the T = 0 window between 0 "
+             "and Omega (plus one neighbour each side): same thermal ImPi, ~2.5x less work; ImPiMed and "
+             "ImPiNoThermal become NaN.  Needs inline subtraction, --parallel-mode processes, no "
+             "--eps-union-core.",
+    )
+    p.add_argument(
+        "--control-analytic",
+        action="store_true",
+        help="Control line A0 of the inline residual evaluated exactly from the QP model saved in the "
+             "control cubes (qp_model_k/E/Z/G/floor, written by qp_cube.build_qp_cube) at every (p, eps) "
+             "and at the exact partner momentum of every angular node, instead of interpolating the "
+             "stored A0 cube bilinearly between k rows (2026-10-02).  Needs inline subtraction and "
+             "angular-mode kjac or phipanel; not with --eps-union-core.",
+    )
     p.add_argument("--p-integration-mode", choices=("plain", "panel_kinks"), default="plain",
                    help="GL panel quadrature for the radial p-integral, splitting at kF_dn and kF_up-Q.")
     p.add_argument("--p-gl-n", type=int, default=8,
@@ -905,7 +947,7 @@ def maybe_enrich_omega_grid(
         features.extend((omega_th + 0.5 * (k_up + q_vals) ** 2).tolist())
         features.extend((omega_th + 0.5 * (k_dn - q_vals) ** 2).tolist())
         features.extend((omega_th + 0.5 * (k_dn + q_vals) ** 2).tolist())
-    return enrich_grid_with_feature_windows(
+    out = enrich_grid_with_feature_windows(
         np.asarray(omega_grid, dtype=float),
         a=float(omega_grid[0]),
         b=float(omega_grid[-1]),
@@ -913,6 +955,17 @@ def maybe_enrich_omega_grid(
         half_width=hw,
         n_local=nloc,
     )
+    # OMEGA_PAULI_STEP (2026-10-02): uniform block on |Omega| <= |mu_up - mu_dn| + 0.1, where the edges of
+    # the Pauli window of the Q < qff rows sweep as Q varies ((kF_up - Q)^2 - mu_dn and (Q + kF_dn)^2 - mu_up).
+    # On a coarse grid the KK error of each row depends on where its edge falls between nodes: an
+    # oscillation of ReGamma^-1(Q, 0) in Q of ~1 delta at high P, which decides the qff / Q ~ 0 race.
+    step = float(os.environ.get("OMEGA_PAULI_STEP", "0") or 0.0)
+    if step > 0.0 and np.isfinite(mu_up) and np.isfinite(mu_dn):
+        span = abs(float(mu_up) - float(mu_dn)) + 0.1
+        block = np.arange(-span, span + 0.5 * step, step)
+        block = block[(block > float(omega_grid[0])) & (block < float(omega_grid[-1]))]
+        out = np.unique(np.concatenate([out, block]))
+    return out
 
 
 def maybe_enrich_q_grid(
@@ -1028,6 +1081,17 @@ def maybe_enrich_p_grid(
         for qv in q_vals:
             q_abs = abs(float(qv))
             features.extend([abs(q_abs - kf_up), abs(q_abs - kf_dn), q_abs + kf_up, q_abs + kf_dn])
+    graded_min = float(os.environ.get("IMPI_P_GRADED_MIN", "0") or 0.0)
+    if graded_min > 0.0:
+        # IMPI_P_GRADED_MIN (2026-10-02): windows graded geometrically toward each kF (distances
+        # from this value to half_width, n_local nodes per side) instead of n_local uniform nodes:
+        # near the critical point the QP ridge of the residual is ~1e-3 wide in energy
+        g = [np.asarray(p_grid, dtype=float)]
+        lo, hi = float(p_grid[0]), float(p_grid[-1])
+        d = np.geomspace(graded_min, hw, max(2, nloc))
+        for kf in features:
+            g.append(np.clip(np.concatenate([kf - d[::-1], [kf], kf + d]), lo, hi))
+        return np.unique(np.concatenate(g))
     return enrich_grid_with_feature_windows(
         np.asarray(p_grid, dtype=float),
         a=float(p_grid[0]),
@@ -1774,6 +1838,20 @@ def main() -> None:
             raise ValueError("full/control spin-up k grids differ")
         if not np.array_equal(kd, control_kd):
             raise ValueError("full/control spin-down k grids differ")
+    control_qp_up = control_qp_dn = None
+    if inline_control and bool(args.control_analytic):
+        def _qp_model(path):
+            with np.load(path) as z:
+                need = ("qp_model_k", "qp_model_E", "qp_model_Z", "qp_model_G", "qp_model_floor")
+                missing = [key for key in need if key not in z.files]
+                if missing:
+                    raise ValueError(f"--control-analytic: {path} non ha {missing} (rifare la cube con qp_cube)")
+                return (np.asarray(z["qp_model_k"], float), np.asarray(z["qp_model_E"], float),
+                        np.asarray(z["qp_model_Z"], float), np.asarray(z["qp_model_G"], float),
+                        float(z["qp_model_floor"]))
+        control_qp_up = _qp_model(control_up_path)
+        control_qp_dn = _qp_model(control_down_path)
+        print(f"[impi-control] A0 ANALITICO dal modello QP (pavimento larghezza {control_qp_up[4]:g})", flush=True)
     eps0, mu_up, mu_dn = load_cube_physics(up_path)
     up_a_convention = load_cube_a_convention(up_path)
     down_a_convention = load_cube_a_convention(down_path)
@@ -2206,14 +2284,25 @@ def main() -> None:
     control_up_grid = None
     if inline_control:
         assert control_ku is not None and control_wu is not None and control_au is not None
-        control_up_grid, in_control_up = bilinear_eval_with_support(
-            p_grid[:, None],
-            eps_grid[None, :],
-            control_ku,
-            control_wu,
-            control_au,
-        )
-        control_up_grid = np.where(in_control_up, control_up_grid, 0.0)
+        if control_qp_up is not None:
+            mk, mE, mZ, mG, gfloor = control_qp_up
+            if os.environ.get("QP_E_INTERP_K2", "0").strip().lower() not in ("", "0", "false", "no"):
+                e_m = (np.interp(p_grid, mk, np.asarray(mE, float) - np.asarray(mk, float) ** 2)
+                       + p_grid ** 2)[:, None]   # E - k^2 lineare (vedi analytic_bubble._interp_e)
+            else:
+                e_m = np.interp(p_grid, mk, mE)[:, None]
+            z_m = np.interp(p_grid, mk, mZ)[:, None]
+            g_m = np.maximum(np.interp(p_grid, mk, mG), float(gfloor))[:, None]
+            control_up_grid = (z_m / np.pi) * g_m / ((eps_grid[None, :] - e_m) ** 2 + g_m ** 2)
+        else:
+            control_up_grid, in_control_up = bilinear_eval_with_support(
+                p_grid[:, None],
+                eps_grid[None, :],
+                control_ku,
+                control_wu,
+                control_au,
+            )
+            control_up_grid = np.where(in_control_up, control_up_grid, 0.0)
 
     im_pi_full = np.zeros((q_grid.size, omega_grid.size), dtype=float)
     im_pi_med = np.zeros((q_grid.size, omega_grid.size), dtype=float)
@@ -2432,6 +2521,23 @@ def main() -> None:
         im_pi_no_thermal_i = np.asarray(scan["im_pi_no_thermal"], dtype=float)
         return int(iq0), float(support_mean_i), im_pi_full_i, im_pi_med_i, im_pi_no_thermal_i
 
+    if bool(args.control_analytic):
+        if not inline_control:
+            raise ValueError("--control-analytic richiede la sottrazione inline (--subtract-*-cube-path)")
+        if not (mode_l == "processes" and n_workers > 1):
+            raise ValueError("--control-analytic richiede --parallel-mode processes con piu' di un worker")
+        if float(args.eps_union_core) > 0.0:
+            raise ValueError("--control-analytic non e' implementato con --eps-union-core")
+        if angular_mode not in {"kjac", "phipanel"}:
+            raise ValueError("--control-analytic richiede --angular-mode kjac o phipanel")
+    if args.eps_window_only:
+        if not inline_control:
+            raise ValueError("--eps-window-only richiede la sottrazione inline (--subtract-*-cube-path)")
+        if not (mode_l == "processes" and n_workers > 1):
+            raise ValueError("--eps-window-only richiede --parallel-mode processes con piu' di un worker")
+        if float(args.eps_union_core) > 0.0:
+            raise ValueError("--eps-window-only e --eps-union-core sono alternativi")
+        print("[impi] EPS WINDOW ONLY: residuo valutato solo sui nodi eps della finestra [0, Omega]", flush=True)
     union_width = float(args.eps_union_core)
     union_core = None
     union_up_fn = None
@@ -2473,6 +2579,7 @@ def main() -> None:
         _IMPI_WORKER_CTX = {
             "union_core": union_core,
             "union_up_fn": union_up_fn,
+            "eps_window_only": bool(args.eps_window_only),
             "kd": kd,
             "wd": wd,
             "ad": ad_integral,
@@ -2490,6 +2597,7 @@ def main() -> None:
             "control_kd": control_kd,
             "control_wd": control_wd,
             "control_ad": control_ad,
+            "control_qp_dn": control_qp_dn,
             "angular_mode": angular_mode,
             "routing": str(args.routing),
             "n_kquad": int(args.n_kquad),
@@ -2722,6 +2830,8 @@ def main() -> None:
         q_feature_n_local=np.array(int(args.q_feature_n_local), dtype=np.int64),
         eps_integration_mode=np.array(str(args.eps_integration_mode)),
         eps_union_core=np.array(float(args.eps_union_core)),
+        eps_window_only=np.array(bool(args.eps_window_only)),
+        control_analytic=np.array(bool(args.control_analytic)),
         omega_feature_half_width=np.array(float(args.omega_feature_half_width), dtype=np.float64),
         omega_feature_n_local=np.array(int(args.omega_feature_n_local), dtype=np.int64),
         omega_feature_mode=np.array(str(args.omega_feature_mode)),

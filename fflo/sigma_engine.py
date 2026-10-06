@@ -211,6 +211,44 @@ def _rowlocal_bilinear_pairs(kq, wq, k_axis, w_grid, values):
     lower = np.clip(lower, 0, ka.size - 2)
     source_indices = np.flatnonzero(inside_k)
     inside = np.zeros_like(kf, dtype=bool)
+    wq_a = np.asarray(wq, dtype=float)
+    # axes along which eps really varies (broadcast views have stride 0 on the others)
+    vary = [ax for ax, n in enumerate(wq_a.shape) if n > 1 and wq_a.strides[ax] != 0]
+    if (
+        os.environ.get("SIGMA_ROWLOCAL_LOOP", "0") != "1"
+        and len(vary) == 1 and wq_a.ndim == len(shape)
+    ):
+        # 2026-10-02: the queried eps vary along ONE axis only (outer products and the ring
+        # windows of the pair-native Sigma engine: a few dozen distinct eps, millions of points).
+        # Same grouped arithmetic as the loop below, but each k row is interpolated once on the
+        # distinct eps and the values are gathered (np.interp at the same points gives the same
+        # bits).  SIGMA_ROWLOCAL_LOOP=1 restores the loop.
+        v_ax = vary[0]
+        pick = tuple(slice(None) if ax == v_ax else 0 for ax in range(wq_a.ndim))
+        eps_v = np.ascontiguousarray(wq_a[pick])
+        n_e = eps_v.size
+        jshape = tuple(n_e if ax == v_ax else 1 for ax in range(wq_a.ndim))
+        jidx = np.broadcast_to(np.arange(n_e).reshape(jshape), shape).ravel()
+        # group the points by k row with one stable sort instead of one full mask per row
+        order = np.argsort(lower, kind="stable")
+        lower_sorted = lower[order]
+        cuts = np.flatnonzero(np.diff(lower_sorted)) + 1
+        starts = np.concatenate(([0], cuts))
+        ends = np.concatenate((cuts, [lower_sorted.size]))
+        for g0, g1 in zip(starts, ends):
+            index = int(lower_sorted[g0])
+            select = source_indices[order[g0:g1]]
+            js = jidx[select]
+            v0 = np.interp(eps_v, wg[index], tab[index], left=0.0, right=0.0)[js]
+            v1 = np.interp(eps_v, wg[index + 1], tab[index + 1], left=0.0, right=0.0)[js]
+            tk = (kf[select] - ka[index]) / max(ka[index + 1] - ka[index], 1.0e-14)
+            out[select] = (1.0 - tk) * v0 + tk * v1
+            ins_e = (
+                ((eps_v >= wg[index, 0]) & (eps_v <= wg[index, -1]))
+                | ((eps_v >= wg[index + 1, 0]) & (eps_v <= wg[index + 1, -1]))
+            )
+            inside[select] = ins_e[js]
+        return out.reshape(shape), inside.reshape(shape)
     for index in np.unique(lower):
         select_local = lower == index
         select = source_indices[select_local]
@@ -469,7 +507,10 @@ def _im_sigma_row_pair_native(
     eps_lo = float(om[0]) - float(max(w_tgt[-1], 0.0))
     eps_hi = float(om[-1]) - float(min(w_tgt[0], 0.0))
     # smooth theta-averaged fermion table on a dense-core + stretched grid
-    eps_core = np.arange(-0.5, 0.5 + 1e-12, 2.0e-3)
+    # SIGMA_PN_EPS_CORE_DW (2026-10-02, audit degli integrali): passo del blocco centrale della
+    # tabella del fermione; default 2e-3 = produzione, bit per bit.
+    _eps_core_dw = float(os.environ.get("SIGMA_PN_EPS_CORE_DW", "2.0e-3"))
+    eps_core = np.arange(-0.5, 0.5 + 1e-12, _eps_core_dw)
     n_str = 420
     eps_pos = 0.5 * np.exp(np.linspace(0.0, np.log(max(eps_hi, 1.0) / 0.5), n_str))
     eps_neg = -0.5 * np.exp(np.linspace(0.0, np.log(max(-eps_lo, 1.0) / 0.5), n_str))

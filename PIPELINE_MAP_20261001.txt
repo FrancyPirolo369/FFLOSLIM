@@ -493,10 +493,17 @@ A) COSTRUITE A RUNTIME
        passo ~7e-3 attorno a 0; da qui il pavimento di ImΣ(kF,0) che fa la
        larghezza QP a kF.  193 nodi: +0.017 su g_c al punto fisso (P=0.50).
 
-  k dove Σ viene davvero valutata              sigma_engine.py:901
-       select_sigma_k_indices: un linspace più le soglie cinematiche
-       (kF interno ed esterno, q ± kF): i 24 punti NON sono equispaziati.
-       Fra un nodo e l'altro Σ è interpolata linearmente in k.
+  k dove Σ viene davvero valutata              density.py:668-739
+       dentro memory_safe_im_sigma: 8 ancore fisiche, UN nodo ciascuna
+       (kF esterno, ½kF esterno, kF interno, qff, |qff−kF_int|, qff+kF_int,
+       (qff+kF_int)/2, kF_int+qff/2), poi i nodi rimasti uno alla volta dove
+       il buco è più grande ("farthest point") su tutto [0, k_update_max]:
+       passo ~0.4 ovunque.  --sigma-k-feature-fraction riserverebbe una quota
+       a k ≤ qff + kF_max, ma run_test passa 0 (run_test.py:536).
+       ⇒ a kF c'è un nodo, ma i vicini stanno a ± 0.2-0.35 kF.
+       Fra i nodi ImΣ è interpolata PCHIP in k (density.py:988-997).
+     ★ correzione: select_sigma_k_indices (sigma_engine.py:901) è importata
+       ma non chiamata; la mappa del 23/09 la dava per viva.
 
   ω per-riga — infittimento attorno ai poli    sigma_engine.py:1124
        rebuild_omega_per_k: ogni riga k ha i suoi nodi addensati sul SUO

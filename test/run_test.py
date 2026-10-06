@@ -95,7 +95,9 @@ CONFIG = [
                                  "k^2/m - (mu + sigma0), what the cube has at large k: "
                                  "the validated choice (2026-09-24 Lambda scan)"),
     ("taper-mode",   "qkin_cosine", "pair_gamma --residual-omega-taper-mode "
-                                 "(cosine|hard|none|qkin_cosine|qkin_hard).  Any "
+                                 "(cosine|hard|none|qkin_cosine|qkin_hard|qcut_cosine; qcut = "
+                                 "residuo intero fino a dove la bolla con |p| <= Lambda e' completa, "
+                                 "sfumato solo negli ultimi taper-stop, 2026-10-04).  Any "
                                  "value other than the pairbuild one runs pair_gamma "
                                  "separately, like --truncation-fix"),
     ("taper-stop",   20.0,       "pair_gamma --residual-omega-taper-stop"),
@@ -118,15 +120,52 @@ CONFIG = [
     ("sigma-nomega", 41,         "omega points where Sigma is really evaluated; "
                                  "cost is sigma_nk * sigma_nomega per spin"),
     ("n-theta",      32,         "angular nodes in the density stage"),
+    ("omega-chunk",  1000,       "density --omega-chunk: Sigma omega nodes per call of the row engine.  "
+                                 "The theta-averaged fermion table (1200 Q x 32 theta x ~1340 eps) does "
+                                 "not depend on omega but is rebuilt at every call: density's own default "
+                                 "16 rebuilds it 7x per k row with 97 nodes.  1000 = one call per row: "
+                                 "Sigma x6.3 faster, ImSigma changes by <= 2e-5 relative (2026-10-02)"),
     ("profile",      "turbo",    "pairbuild quadrature preset: turbo|quick|gold"),
     ("impi-eps-union", 0.0,      "PROD_UNION: half-width of the eps-lattice core copied "
                                  "onto eps = Omega in the ImPi integral (pairbuild "
                                  "--eps-union-core); 0 = off.  0.12 removes the sawtooth "
                                  "at the eps nodes (validated locally 2026-09-29)"),
+    ("impi-eps-window", True,    "pairbuild --eps-window-only: evaluate the grid residual only on the eps "
+                                 "nodes of the T = 0 window [0, Omega] (the thermal kernel vanishes "
+                                 "outside).  Bit-identical ImPi, ~2.5x less residual work (2026-10-02); "
+                                 "skipped automatically with --impi-eps-union"),
     ("lattice-dw",   1.0e-3,     "pairbuild fine spacing of the Omega/eps lattices (the "
                                  "linear block keeps its width).  2.5e-4 resolves the "
                                  "minority QP at kF at high P (FWHM 2 Z eta ~ 2e-4) and "
                                  "removes the spurious Q rows near qff (2026-09-29)"),
+    ("angular-feature-nodes", -1, "pairbuild --angular-feature-nodes: angular nodes in the "
+                                 "window around the partner kF (turbo 7; -1 = profile default).  "
+                                 "At high P the minority pole is ~1e-4 wide and 7 nodes alias it "
+                                 "(spikes in the radial integrand, 2026-10-01): 21 halves the "
+                                 "spurious bump beyond qff"),
+    ("p-feature-width", -1.0,    "pairbuild --p-feature-width: half-width of the dense p windows of the "
+                                 "grid residual (negative = profile default, turbo 0).  0.08 with 21 "
+                                 "nodes and p-feature-mode kf_only (73 nodes) resolves the well of "
+                                 "A*A - A0*A0 at p = kF_up: one-step g_c error from 0.02-0.08 to <= 0.006 "
+                                 "for P = 0.10-0.75 (test/energy_bubble/pwindow_probe.py, 2026-10-02); "
+                                 "residual cost per Q row x3.3"),
+    ("p-feature-nodes", -1,      "pairbuild --p-feature-nodes: nodes per p window (negative = profile)"),
+    ("p-feature-mode", "",       "pairbuild --p-feature-mode kf_only|kf_and_shells (empty = pairbuild "
+                                 "default kf_and_shells)"),
+    ("sigma-omega-dense-w", 0.0, "density --sigma-omega-dense-half-width: add the w_base nodes "
+                                 "with |w| <= this to the Sigma omega nodes (0 = off).  At high P "
+                                 "the minority polaron band is 0.02-0.07 wide and the 97 index-"
+                                 "uniform nodes are ~7e-3 apart near 0 (3 nodes across the band "
+                                 "at P = 0.90)"),
+    ("sigma-omega-dense-stride", 2, "take every n-th w_base node in that dense block"),
+    ("sigma-k-kf-offsets", "",   "density --sigma-k-kf-offsets: d values separated by ':' (NOT commas: "
+                                 "sbatch --export splits ARGS at commas), extra Sigma k "
+                                 "nodes at kF*(1 -+ d) for each spin ON TOP of sigma-nk (empty = "
+                                 "off).  Default nodes near kF sit at ~0.5 and ~1.6-2.2 kF at high P"),
+    ("lattice-n-linear", 0,      "pairbuild --lattice-n-linear: nodi del blocco lineare dei reticoli Omega/eps (passo "
+                                 "lattice-dw).  0 = quelli del profilo, riscalati per tenere la stessa larghezza.  Ad alta "
+                                 "P conviene fissarli (es. 160, quanti ne ha la produzione a dw 2.5e-4) e scalare lattice-dw con 1-P: la banda QP del minoritario "
+                                 "E*_F_dn ~ 0.26 (1-P) resta risolta con lo stesso numero di nodi (2026-10-06)"),
     ("lattice-n-tail", 0,         "pairbuild lattice tail nodes; 0 keeps the profile "
                                  "default (turbo 20, quick 45, gold 70)"),
     ("omega-feature-half-width", -1.0,
@@ -152,8 +191,11 @@ CONFIG = [
                                  "(engine default is 8)"),
 
     # --- physics modes -----------------------------------------------------
-    ("thouless-q-mode", "qff",   "where the Thouless condition is imposed: qff or "
-                                 "global-max (max of ReGamma^-1(Q,0) over Q <= 2 qff).  qff "
+    ("thouless-q-mode", "qff",   "where the Thouless condition is imposed: qff, "
+                                 "qff-or-zero (the higher of the two 2D candidates: qff and the "
+                                 "smallest nonzero Q; the choice for high P, 2026-10-01) or "
+                                 "global-max (max of ReGamma^-1(Q,0) over Q <= 2 qff, WITHDRAWN in "
+                                 "2D: it chases numerical maxima).  Old note: qff "
                                  "is never the max: up to P=0.65 the max sits at "
                                  "1.03-1.1 qff, +4 delta above it at P=0.1 (dg -0.05) "
                                  "down to +0.2 at 0.65; from P~0.7 it moves to Q~0 "
@@ -169,6 +211,56 @@ CONFIG = [
                                  "the last N iterations; older ones are first summarised by "
                                  "test/extract_snapshot.py + test/extract_sigma.py into "
                                  "<out>/snap/.  0 = keep everything (~34 MB per iteration)"),
+    ("density-fine-pole", True,  "density --density-fine-pole: n(k) and the density with the omega integral "
+                                 "redone at the QP pole on a merged geometric grid (rows within 0.3 kF), with "
+                                 "the cube's own A.  Removes the spike of n(k) at kF (trapezoid on the row: "
+                                 "int A up to 1.15).  Diagnostic only, does not feed back (2026-10-02)"),
+    ("impi-p-graded-min", 0.0,   "pairbuild/impi_table: finestre in p del residuo graduate geometricamente verso kF "
+                                 "(env IMPI_P_GRADED_MIN; distanze da questo valore a p-feature-width, "
+                                 "p-feature-nodes nodi per lato).  0 = finestre uniformi.  1e-4 toglie lo spike di "
+                                 "ImGamma^-1 a Omega ~ 0 (2026-10-02)"),
+    ("coherent-angle-mode", "kjac", "pairbuild --coherent-angle-mode: kjac (nodi a kF NON applicati) o phipanel "
+                                 "(finestra a kF, graduata se coherent-graded-min > 0)"),
+    ("coherent-graded-min", 0.0, "parte coerente analitica: grappoli in k e finestra angolare graduati verso kF "
+                                 "(env COHERENT_K_GRADED_MIN e COHERENT_PHI_GRADED_MIN).  1e-4 con phipanel toglie "
+                                 "il dente di ReGamma^-1 dopo qff (2026-10-02)"),
+    ("coherent-k-graded-n", 0,   "nodi per lato dei grappoli in k graduati della parte coerente (0 = 120)"),
+    ("coherent-phi-panels", 24,  "pannelli angolari regolari della parte coerente phipanel"),
+    ("control-analytic", False,  "pairbuild --control-analytic: nel residuo a griglia A*A - A0*A0 la A0 e' calcolata "
+                                 "esattamente dal modello QP invece che interpolata fra le righe della cube A0.  A k grande "
+                                 "le righe sono rade e il picco QP si sposta piu' della sua larghezza: l'interpolazione "
+                                 "lasciava un eccesso fino a 2.5x il valore libero vicino al bordo 2 Lambda^2.  Con "
+                                 "l'opzione la bolla senza taper coincide col conto statico entro 0.5 delta (P=0.90, "
+                                 "2026-10-05)"),
+    ("qp-e-interp-k2", False,    "env QP_E_INTERP_K2=1: nel modello QP (controllo A0 esatto e parte coerente analitica) "
+                                 "l'energia fra due righe si interpola come E - k^2 lineare piu' k^2 esatto.  Con E "
+                                 "lineare in k il picco fra righe rade si sposta di ~Dk^2/4: oltre k_update_max fino a "
+                                 "40 larghezze (eta), e restano rasoiate isolate nella parte a griglia (2026-10-05)"),
+    ("uv-guard-lambda", 0.0,     "pair_gamma --residual-qmax-lambda: righe con Q >= F Lambda (fuori dal supporto della "
+                                 "bolla numerica) usano solo Gamma0.  2 chiude il circolo ultravioletto visto con qcut a "
+                                 "P = 0.80 (2026-10-04).  0 = spento"),
+    ("taper-qfreeze", 0.0,       "pair_gamma --residual-taper-qfreeze: per Q < F qff il taper del residuo e' quello "
+                                 "della riga F qff.  0 = taper mobile (produzione).  1 = gara qff / Q ~ 0 senza la "
+                                 "pendenza spuria del taper (a P = 0.85 valeva +4.5 delta a favore di Q ~ 0), riga "
+                                 "qff invariata (2026-10-03)"),
+    ("ref-kk-fine-step", 0.0,    "pair_gamma --ref-kk-fine-step: KK della parte di riferimento analitica su griglia "
+                                 "fine (questo passo) attorno ai suoi bordi di Pauli e soglia.  0 = spento.  2.5e-4 "
+                                 "toglie le oscillazioni di ReGamma^-1 a Q piccolo (gara qff / Q ~ 0 ad alta P) "
+                                 "(2026-10-03)"),
+    ("coherent-phi-feature-n", 21, "nodi per lato della finestra angolare a kF della parte coerente phipanel"),
+    ("zero-fit-qmin", 0.02,      "thouless-q-mode qff-or-zero-fit: finestra del fit dell'altopiano a Q ~ 0 [qff]"),
+    ("zero-fit-qmax", 0.15,      "thouless-q-mode qff-or-zero-fit: finestra del fit dell'altopiano a Q ~ 0 [qff]"),
+    ("omega-pauli-step", 0.0,    "impi_table: blocco uniforme di nodi Omega su |Omega| <= |mu_up - mu_dn| + 0.1 con questo "
+                                 "passo (env OMEGA_PAULI_STEP), dove i bordi della finestra di Pauli delle righe Q < qff "
+                                 "scorrono: riduce l'errore della KK a Q piccolo (gara qff / Q ~ 0, ramo pBCS).  0 = spento"),
+    ("sigma0-mode", "fermi",     "density --sigma0-mode-up/down: fermi (sigma0 = ReSigma(kF, 0): superficie di Fermi al "
+                                 "kF libero, mu fisso) oppure density (spostamento costante scelto perche' n = "
+                                 "(1 -+ P)/2, cioe' mu aggiustato a ogni iterazione).  density serve nel ramo pBCS ad "
+                                 "alta P, dove a mu fisso n_dn va a -13% / +16% (2026-10-03)"),
+    ("density-pole-subtract", False,
+                                 "density --density-pole-subtract: correct n(k) and int A for the "
+                                 "quadrature error of the narrow QP pole near kF (high P: density "
+                                 "+0.5-0.6% -> 0, int A at kF 1.2 -> 1.00).  Reporting only (2026-10-02)"),
     ("contact-tail", False,      "replace the tail beyond k_update_max with C/k^4 "
                                  "instead of freezing the seed values"),
 ]
@@ -362,6 +454,19 @@ def main(argv=None):
     env["SIGMA_PN_RING_MODE"] = cfg["ring_mode"]
     env["SIGMA_PN_ANGLE_EXACT_CUT"] = str(cfg["angle_exact_cut"])
     env["SIGMA_PN_Q_GL_N"] = str(cfg["q_gl_n"])
+    if cfg["omega_pauli_step"] > 0:
+        env["OMEGA_PAULI_STEP"] = f"{cfg['omega_pauli_step']:g}"
+    if cfg["impi_p_graded_min"] > 0:
+        env["IMPI_P_GRADED_MIN"] = f"{cfg['impi_p_graded_min']:g}"
+    if cfg["coherent_graded_min"] > 0:
+        env["COHERENT_K_GRADED_MIN"] = f"{cfg['coherent_graded_min']:g}"
+        env["COHERENT_PHI_GRADED_MIN"] = f"{cfg['coherent_graded_min']:g}"
+    if cfg["qp_e_interp_k2"]:
+        env["QP_E_INTERP_K2"] = "1"
+    if cfg["coherent_k_graded_n"] > 0:
+        env["COHERENT_K_GRADED_N"] = str(cfg["coherent_k_graded_n"])
+    env["COHERENT_PHI_PANELS"] = str(cfg["coherent_phi_panels"])
+    env["COHERENT_PHI_FEATURE_N"] = str(cfg["coherent_phi_feature_n"])
     if cfg["pair_shift_fixed"] is not None:
         env["PAIR_SHIFT_FIXED"] = f"{cfg['pair_shift_fixed']:.15g}"
     # the loop is process-parallel; leave BLAS single-threaded or the pool and the
@@ -434,6 +539,12 @@ def main(argv=None):
             f"nodes={feature_nodes} max_q_points={cfg['omega_feature_q_max_points']}"
             + (f" PROD_UNION eps_union={cfg['impi_eps_union']:g}" if cfg["impi_eps_union"] > 0 else "")
             + (f" lattice_dw={cfg['lattice_dw']:g}" if abs(cfg["lattice_dw"] - 1.0e-3) > 1e-12 else "")
+            + (f" ang_feat={cfg['angular_feature_nodes']}" if cfg["angular_feature_nodes"] >= 0 else "")
+            + (f" p_feat={cfg['p_feature_width']:g}/{cfg['p_feature_nodes']}/{cfg['p_feature_mode'] or 'kf_and_shells'}"
+               if cfg["p_feature_width"] >= 0 else "")
+            + (f" sigma_dense_w={cfg['sigma_omega_dense_w']:g}/{cfg['sigma_omega_dense_stride']}"
+               if cfg["sigma_omega_dense_w"] > 0 else "")
+            + (f" sigma_k_kf={cfg['sigma_k_kf_offsets']}" if cfg["sigma_k_kf_offsets"] else "")
             + " ===")
         cmd = [sys.executable, "-m", "fflo.pairbuild",
                "--up", up, "--down", down, "--out-dir", pb,
@@ -445,8 +556,20 @@ def main(argv=None):
                "--omega-feature-nodes", str(feature_nodes)]
         if cfg["lattice_n_tail"] > 0:
             cmd += ["--lattice-n-tail", str(cfg["lattice_n_tail"])]
+        if cfg["lattice_n_linear"] > 0:
+            cmd += ["--lattice-n-linear", str(cfg["lattice_n_linear"])]
+        if cfg["angular_feature_nodes"] >= 0:
+            cmd += ["--angular-feature-nodes", str(cfg["angular_feature_nodes"])]
+        if cfg["p_feature_width"] >= 0:
+            cmd += ["--p-feature-width", f"{cfg['p_feature_width']:.15g}"]
+        if cfg["p_feature_nodes"] >= 0:
+            cmd += ["--p-feature-nodes", str(cfg["p_feature_nodes"])]
+        if cfg["p_feature_mode"]:
+            cmd += ["--p-feature-mode", cfg["p_feature_mode"]]
         if cfg["impi_eps_union"] > 0:
             cmd += ["--eps-union-core", f"{cfg['impi_eps_union']:.15g}"]
+        elif cfg["impi_eps_window"]:
+            cmd += ["--eps-window-only"]
         if abs(cfg["lattice_dw"] - 1.0e-3) > 1e-12:
             cmd += ["--lattice-dw", f"{cfg['lattice_dw']:.15g}"]
         if cfg["omega_feature_q_min"] >= 0.0:
@@ -463,6 +586,16 @@ def main(argv=None):
             cmd += ["--p-nodes", str(cfg["p_nodes"])]
         if cfg["coherent_nk"] > 0:
             cmd += ["--coherent-nk", str(cfg["coherent_nk"])]
+        if cfg["coherent_angle_mode"] != "kjac":
+            cmd += ["--coherent-angle-mode", cfg["coherent_angle_mode"]]
+        if cfg["ref_kk_fine_step"] > 0.0:
+            cmd += ["--ref-kk-fine-step", f"{cfg['ref_kk_fine_step']:.15g}"]
+        if cfg["taper_qfreeze"] > 0.0:
+            cmd += ["--residual-taper-qfreeze", f"{cfg['taper_qfreeze']:.15g}"]
+        if cfg["uv_guard_lambda"] > 0.0:
+            cmd += ["--residual-qmax-lambda", f"{cfg['uv_guard_lambda']:.15g}"]
+        if cfg["control_analytic"]:
+            cmd += ["--control-analytic"]
         fix = cfg["truncation_fix"]
         split = (fix != "none" or cfg["taper_mode"] != "qkin_cosine"
                  or cfg["taper_stop"] != 20.0 or cfg["im_sign_guard"] != "on")
@@ -497,7 +630,13 @@ def main(argv=None):
                  "--qpqp-n-phi", "24", "--residual-omega-taper-start", "0",
                  "--residual-omega-taper-stop", f"{cfg['taper_stop']:g}",
                  "--residual-omega-taper-mode", cfg["taper_mode"],
-                 "--out-dir", os.path.join(pb, "pair")])
+                 "--out-dir", os.path.join(pb, "pair")]
+                + (["--ref-kk-fine-step", f"{cfg['ref_kk_fine_step']:.15g}"]
+                   if cfg["ref_kk_fine_step"] > 0.0 else [])
+                + (["--residual-taper-qfreeze", f"{cfg['taper_qfreeze']:.15g}"]
+                   if cfg["taper_qfreeze"] > 0.0 else [])
+                + (["--residual-qmax-lambda", f"{cfg['uv_guard_lambda']:.15g}"]
+                   if cfg["uv_guard_lambda"] > 0.0 else []))
             with open(os.path.join(itd, "truncfix_pair.log"), "w") as fh:
                 for step in steps:
                     rc = subprocess.run(step, env=env, cwd=HERE, stdout=fh,
@@ -529,9 +668,11 @@ def main(argv=None):
                "--subcritical-delta", f"{cfg['delta']:.15g}",
                "--sigma-nk", str(cfg["sigma_nk"]),
                "--n-theta", str(cfg["n_theta"]),
+               "--omega-chunk", str(cfg["omega_chunk"]),
                "--sigma-nomega", str(cfg["sigma_nomega"]),
                "--eta-floor-mode", cfg["eta_floor"],
                "--thouless-q-mode", cfg["thouless_q_mode"],
+               "--zero-fit-qmin", f"{cfg['zero_fit_qmin']:g}", "--zero-fit-qmax", f"{cfg['zero_fit_qmax']:g}",
                "--high-k-sigma-mode", cfg["high_k_sigma"],
                "--sigma-k-feature-fraction", "0", "--pole-refind-n-local", "61",
                "--k-update-max", f"{k_update_max:.15g}"]
@@ -540,6 +681,17 @@ def main(argv=None):
             cmd.append("--allow-partial-q-support")
         if cfg["contact_tail"]:
             cmd.append("--density-contact-tail")
+        if cfg["sigma0_mode"] != "fermi":
+            cmd += ["--sigma0-mode-up", cfg["sigma0_mode"], "--sigma0-mode-down", cfg["sigma0_mode"]]
+        if cfg["density_fine_pole"]:
+            cmd.append("--density-fine-pole")
+        elif cfg["density_pole_subtract"]:
+            cmd.append("--density-pole-subtract")
+        if cfg["sigma_k_kf_offsets"]:
+            cmd += ["--sigma-k-kf-offsets", cfg["sigma_k_kf_offsets"]]
+        if cfg["sigma_omega_dense_w"] > 0:
+            cmd += ["--sigma-omega-dense-half-width", f"{cfg['sigma_omega_dense_w']:.15g}",
+                    "--sigma-omega-dense-stride", str(cfg["sigma_omega_dense_stride"])]
         cmd += ["--mix", f"{cfg['alpha']:g}", "1.0", "--out-dir", dd,
                 "--emit-cube-dir", nc, "--emit-cube-alpha", f"{cfg['alpha']:g}",
                 "--iteration-index", str(i), "--workers", str(cfg["workers"])]
